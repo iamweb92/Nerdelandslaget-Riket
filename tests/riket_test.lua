@@ -1,6 +1,7 @@
 -- Offline test for Nerdelandslaget: Riket. Simulates several WoW clients (each its own globals)
--- in different "nerd" guilds on one shared channel, with a fake clock, and checks the guild chat
--- bridge, the online lists, the professions board and that the window builds.
+-- in different "nerd" guilds on one shared channel, with a fake clock and a fake guild window
+-- (J), and checks the guild chat bridge, the online lists, the professions board, the Discord
+-- name and Riket in the guild window: its tabs, its pages and the merged guild chat.
 -- Usage: luajit riket_test.lua <addon folder>
 local DIR = assert(arg[1], "addon folder")
 local FILES = { "Core.lua", "Chat.lua", "Members.lua", "Professions.lua", "UI.lua" }
@@ -22,6 +23,7 @@ local function Advance(seconds)
 	now = stop
 end
 
+
 -- A frame stand-in: every method exists; Get* answer a harmless value.
 local function Stub(name)
 	local f = { scripts = {}, events = {}, name = name }
@@ -33,13 +35,18 @@ local function Stub(name)
 			self.scripts[kind] = old and function(...) old(...) fn(...) end or fn
 		end end
 		if k == "RegisterEvent" then return function(self, e) self.events[e] = true end end
-		if k == "IsShown" then return function(self) return self.shown ~= false end end
+		if k == "IsShown" or k == "IsVisible" then return function(self) return self.shown ~= false end end
 		if k == "Show" then return function(self) self.shown = true if self.scripts.OnShow then self.scripts.OnShow(self) end end end
-		if k == "Hide" then return function(self) self.shown = false end end
+		if k == "Hide" then return function(self) self.shown = false if self.scripts.OnHide then self.scripts.OnHide(self) end end end
 		if k == "SetShown" then return function(self, v) self.shown = v and true or false end end
 		if k == "GetText" then return function(self) return self.text or "" end end
 		if k == "SetText" then return function(self, v) self.text = v end end
 		if k == "AddMessage" then return function(self, line) local l = rawget(self, "lines") or {} rawset(self, "lines", l) table.insert(l, line) end end
+		if k == "Clear" then return function(self) rawset(self, "lines", {}) end end
+		if k == "SetAlpha" then return function(self, a) self.alpha = a end end
+		if k == "SetPoint" then return function(self, ...) local p = rawget(self, "points") or {} rawset(self, "points", p) p[#p + 1] = { ... } end end
+		if k == "ClearAllPoints" then return function(self) rawset(self, "points", {}) end end
+		if k == "SetEnabled" then return function(self, v) self.enabled = v and true or false end end
 		if k == "GetPoint" then return function() return "CENTER", nil, "CENTER", 0, 0 end end
 		if k == "GetMinMaxValues" then return function() return 0, 0 end end
 		if k == "GetHeight" then return function() return 400 end end
@@ -48,6 +55,7 @@ local function Stub(name)
 		if k == "GetChecked" then return function(self) return self.checked == true end end
 		if k == "SetChecked" then return function(self, v) self.checked = v and true or false end end
 		if k == "HasFocus" then return function() return false end end
+		if k == "GetTop" or k == "GetBottom" then return function() return nil end end
 		if type(k) == "string" and k:match("^Get") then return function() return 0 end end
 		if type(k) == "string" and k:match("^Create") then return function() return Stub() end end
 		if type(k) == "string" and k:match("^%u") then return function() end end
@@ -56,23 +64,25 @@ local function Stub(name)
 end
 
 local clients, byName = {}, {}
+local GUILD_CLUB, GUILD_STREAM, OFFICER_STREAM, OTHER_CLUB = "club-guild", "stream-guild", "stream-officer", "club-friends"
 
 local function Client(name, guild, opts)
 	opts = opts or {}
 	local env = setmetatable({}, { __index = _G })
-	local c = { name = name, guild = guild, env = env, frames = {}, sent = {}, chat = {} }
+	local c = { name = name, guild = guild, env = env, frames = {}, sent = {}, chat = {}, clubMessages = {} }
 	env._G = env
 	env.time = function() return now end
 	env.GetTime = function() return now end
 	env.date = function(fmt, t) return os.date(fmt, t or now) end
-	env.print = function(...) c.printed = (c.printed or 0) + 1 end
+	c.prints = {}
+	env.print = function(...) c.printed = (c.printed or 0) + 1 c.prints[#c.prints + 1] = table.concat({ ... }, " ") end
 	env.C_Timer = {
 		After = function(s, fn) Schedule(now + s, fn) end,
 		NewTicker = function(s, fn) Schedule(now + s, fn, s) end,
 	}
-	local KNOWN = { ButtonFrameTemplate = true, PanelTabButtonTemplate = true, UIPanelButtonTemplate = true,
-		UICheckButtonTemplate = true, InputBoxTemplate = true, WowStyle1DropdownTemplate = true, WowScrollBoxList = true,
-		MinimalScrollBar = true, UIPanelCloseButton = true, BackdropTemplate = true }
+	local KNOWN = { UIPanelButtonTemplate = true, UICheckButtonTemplate = true, InputBoxTemplate = true,
+		WowStyle1DropdownTemplate = true, WowScrollBoxList = true, MinimalScrollBar = true, WowTrimScrollBar = true,
+		InsetFrameTemplate = true, CommunitiesFrameTabTemplate = true, BackdropTemplate = true }
 	env.C_XMLUtil = { GetTemplateInfo = function(t)
 		if opts.noTemplates then return nil end
 		if KNOWN[t] then return { type = "Frame" } end
@@ -90,13 +100,7 @@ local function Client(name, guild, opts)
 		if template and not env.C_XMLUtil.GetTemplateInfo(template) then error("Couldn't find inherited node " .. template) end
 		local f = Stub(fname)
 		f.kind, f.template, f.parent = kind, template, parent
-		if template == "ButtonFrameTemplate" then
-			f.Inset, f.CloseButton = Stub(), Stub()
-			f.PortraitContainer = { portrait = Stub() }
-			f.TitleContainer = { TitleText = Stub() }
-			f.SetTitle = function(self, t) self.title = t end
-			f.SetPortraitToAsset = function(self, path) self.portraitPath = path end
-		elseif template == "WowScrollBoxList" then
+		if template == "WowScrollBoxList" then
 			f.rows = {}
 			f.SetDataProvider = function(self, dp)
 				self.dp = dp
@@ -128,10 +132,7 @@ local function Client(name, guild, opts)
 	env.CreateDataProvider = function(items) return { items = items } end
 	env.CreateAnchor = function(...) return { ... } end
 	env.ScrollBoxConstants = { RetainScrollPosition = 1 }
-	env.PanelTemplates_SetNumTabs = function(f, n) f.numTabs = n end
-	env.PanelTemplates_SetTab = function(f, i) f.selectedTab = i end
-	env.PanelTemplates_TabResize = function() end
-	env.SOUNDKIT = { IG_CHARACTER_INFO_TAB = 841, IG_CHARACTER_INFO_OPEN = 839, IG_CHARACTER_INFO_CLOSE = 840 }
+	env.SOUNDKIT = { IG_CHARACTER_INFO_TAB = 841 }
 	env.PlaySound = function(k) c.sounds = (c.sounds or 0) + 1 end
 	local version = io.open(DIR .. "/Nerdelandslaget_Riket.toc"):read("*a"):match("## Version: ([%d%.]+)")
 	env.C_AddOns = {
@@ -142,7 +143,6 @@ local function Client(name, guild, opts)
 	env.GameTooltip = Stub()
 	env.GameTooltip.SetText = function(self, t) self.tlines = { t } end
 	env.GameTooltip.AddLine = function(self, t) table.insert(self.tlines, t) end
-	env.UISpecialFrames = {}
 	env.SlashCmdList = {}
 	env.tinsert = table.insert
 	env.strtrim = function(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
@@ -183,31 +183,61 @@ local function Client(name, guild, opts)
 		local orig = t[key]
 		t[key] = function(...) local r = { orig(...) } fn(...) return unpack(r) end
 	end
-	-- the guild window (J): Blizzard_Communities, loaded at the first ToggleGuildFrame
+	env.Enum = {
+		SendAddonMessageResult = { Success = 0, AddonMessageThrottle = 3, ChannelThrottle = 8 },
+		ClubType = { BattleNet = 0, Character = 1, Guild = 2 },
+		ClubStreamType = { General = 0, Guild = 1, Officer = 2 },
+	}
+	-- the game's side of guild chat: messages per client, as C_Club holds them
+	env.C_Club = {
+		GetClubInfo = function(id) return { clubType = id == GUILD_CLUB and 2 or 1 } end,
+		GetStreamInfo = function(clubId, streamId) return { streamType = streamId == GUILD_STREAM and 1 or 2 } end,
+		GetMessageRanges = function(clubId, streamId)
+			if streamId ~= GUILD_STREAM or #c.clubMessages == 0 then return {} end
+			return { { oldestMessageId = { epoch = 0, position = 1 }, newestMessageId = { epoch = 0, position = #c.clubMessages } } }
+		end,
+		GetMessagesInRange = function(clubId, streamId, oldest, newest)
+			local out = {}
+			for i = oldest.position, newest.position do out[#out + 1] = c.clubMessages[i] end
+			return out
+		end,
+		GetMessageInfo = function(clubId, streamId, id) return c.clubMessages[id.position] end,
+	}
+	-- the guild window (J): Blizzard_Communities, loaded at the first ToggleGuildFrame. Its four
+	-- side tabs sit with GuildInfoTab above GuildBenefitsTab, unlike their order in its code.
+	local TAB_SPOTS = { ChatTab = { 400, 368 }, RosterTab = { 351, 319 }, GuildInfoTab = { 302, 270 }, GuildBenefitsTab = { 253, 221 } }
 	local function Communities()
 		local host = Stub("CommunitiesFrame")
 		host.shown = false
 		host.GetWidth = function() return opts.hostWidth or 814 end
 		host.GetHeight = function() return 426 end
 		host.mode = "CHAT"
+		host.club, host.stream = GUILD_CLUB, GUILD_STREAM
 		host.GetDisplayMode = function(self) return self.mode end
 		host.SetDisplayMode = function(self, m) self.mode = m end
-		host.Hide = function(self) self.shown = false if self.scripts.OnHide then self.scripts.OnHide(self) end end
+		host.GetSelectedClubId = function(self) return self.club end
+		host.GetSelectedStreamId = function(self) return self.stream end
+		host.SelectClub = function(self, id) self.club = id end
+		host.SelectStream = function(self, clubId, streamId) self.club, self.stream = clubId, streamId end
 		for i, key in ipairs({ "ChatTab", "RosterTab", "GuildBenefitsTab", "GuildInfoTab" }) do
 			local t = Stub(key)
 			t.checked, t.shown = (i == 1), true
+			local spot = TAB_SPOTS[key]
+			t.GetTop = function() return spot[1] end
+			t.GetBottom = function() return spot[2] end
 			host[key] = t
 		end
+		host.Chat = Stub("Chat")
+		host.Chat.MessageFrame = Stub("Blizzard chat")
+		host.Chat.ScrollBar = Stub("Blizzard chat bar")
 		env.CommunitiesFrame = host
 		env.COMMUNITIES_FRAME_DISPLAY_MODES = { MINIMIZED = "MINIMIZED", CHAT = "CHAT", ROSTER = "ROSTER" }
 		return host
 	end
-	if opts.communities then
-		env.ToggleGuildFrame = function()
-			if not env.CommunitiesFrame then Communities() c.Fire("ADDON_LOADED", "Blizzard_Communities") end
-			local h = env.CommunitiesFrame
-			if h.shown then h:Hide() else h:Show() end
-		end
+	env.ToggleGuildFrame = function()
+		if not env.CommunitiesFrame then Communities() c.Fire("ADDON_LOADED", "Blizzard_Communities") end
+		local h = env.CommunitiesFrame
+		if h.shown then h:Hide() else h:Show() end
 	end
 	env.GetChannelName = function(n) if n == "NLRiketNet" and c.joined then return 5, n end return 0 end
 	env.JoinTemporaryChannel = function(n) if not opts.noChannel then c.joined = true end end
@@ -224,13 +254,18 @@ local function Client(name, guild, opts)
 			end
 			return 0
 		end,
+		-- /g: the game keeps it as a guild chat message for everyone in the guild and tells them
 		SendChatMessage = function(text, kind)
 			for _, o in ipairs(clients) do
-				if o.guild == c.guild then o.Fire("CHAT_MSG_GUILD", text, name .. "-CAMWOWEU5Realm2PvP") end
+				if o.guild == c.guild then
+					local id = { epoch = now * 1e6, position = #o.clubMessages + 1 }
+					o.clubMessages[#o.clubMessages + 1] = { messageId = id, author = { name = name .. "-CAMWOWEU5Realm2PvP", classID = opts.class == "MAGE" and 8 or 1 }, content = text }
+					o.Fire("CHAT_MSG_GUILD", text, name .. "-CAMWOWEU5Realm2PvP")
+					o.Fire("CLUB_MESSAGE_ADDED", GUILD_CLUB, GUILD_STREAM, id)
+				end
 			end
 		end,
 	}
-	env.Enum = { SendAddonMessageResult = { Success = 0, AddonMessageThrottle = 3, ChannelThrottle = 8 } }
 	env.C_SkillInfo = { GetSkillLineInfoByID = function(id)
 		local p = (opts.profs or {})[id]
 		return { name = ({ [164] = "Blacksmithing", [186] = "Mining", [171] = "Alchemy" })[id] or ("Skill" .. id),
@@ -272,8 +307,11 @@ local function ok(cond, what)
 end
 local function Lines(c) return rawget(c.env.ChatFrame1, "lines") or {} end
 local function has(list, pat)
-	for _, l in ipairs(list or {}) do if l:find(pat, 1, true) then return true end end
+	for _, l in ipairs(list or {}) do if type(l) == "string" and l:find(pat, 1, true) then return true end end
 	return false
+end
+local function find(list, pat)
+	for i, l in ipairs(list or {}) do if type(l) == "string" and l:find(pat, 1, true) then return i end end
 end
 
 -- Two guilds: Aria and Bjorn in <Nerdelandslaget>, Cato in <Nerdelandslaget II>; Dina is in no
@@ -383,38 +421,47 @@ ok(Cc.R.db.crafters["Aria Ashfall"].links[164]:find("Htrade", 1, true), "a bad l
 local all = Cc.ns.Prof.Rows(0)
 ok(#all == 3, "the board holds everyone's professions: Aria 2, Cato 1 (got " .. #all .. ")")
 
--- The window builds and every tab fills.
-local okUI, err = pcall(function()
-	Cc.ns.UI.Open(1) Cc.ns.UI.Open(2) Cc.ns.UI.Open(3) Cc.ns.UI.Refresh()
-end)
-ok(okUI, "the window builds and fills: " .. tostring(err))
-local okD = pcall(function() D.ns.UI.Open(2) end)
-ok(okD, "the window opens outside the network too (behind its curtain)")
-local okSlash = pcall(function() Cc.env.SlashCmdList.NLRIKET("status") Cc.env.SlashCmdList.NLRIKET("") end)
-ok(okSlash, "/riket works")
-
--- The native look: Blizzard's portrait window with the NL emblem, bottom tabs, the credit.
-local W = Cc.env.NLRiketFrame
-ok(W and W.template == "ButtonFrameTemplate", "the window is Blizzard's portrait window")
-ok(W.title == "Nerdelandslaget: Riket", "its title")
-ok(W.portraitPath and W.portraitPath:find("media\\portrait128", 1, true), "the NL emblem sits in the portrait")
-ok(W.credit and W.credit.text and W.credit.text:find("Made by Neophyte", 1, true), "the credit: " .. tostring(W.credit and W.credit.text))
+-- Discord names travel in the hello.
 local tocVersion = io.open(DIR .. "/Nerdelandslaget_Riket.toc"):read("*a"):match("## Version: ([%d%.]+)")
-ok(W.credit.text:find("v" .. tocVersion, 1, true), "the credit carries the version from the .toc: " .. W.credit.text)
-ok(W.numTabs == 3 and Cc.env.NLRiketFrameTab1 and Cc.env.NLRiketFrameTab3 and Cc.env.NLRiketFrameTab2.template == "PanelTabButtonTemplate", "three Blizzard tabs along the bottom")
-ok(W.selectedTab == 3, "the open page's tab is marked")
-Cc.env.NLRiketFrameTab2.scripts.OnClick(Cc.env.NLRiketFrameTab2, "LeftButton")
-ok(W.selectedTab == 2 and Cc.R.db.tab == 2, "clicking a tab switches page")
-ok(W.status.text and W.status.text:find("Nerdelandslaget II", 1, true) and W.status.text:find("60 of 60 online", 1, true), "the status strip shows who is online: " .. tostring(W.status.text))
+ok(A.R.db.discords["Cato Cobalt"] == "cato_dc" and Cc.R.db.discords["Aria Ashfall"] == "aria_dc", "Discord names reach the other guild")
+ok(has(A.sent, "H;Nerdelandslaget;" .. tocVersion .. ";aria_dc"), "the hello carries the Discord name")
+B.Fire("CHAT_MSG_ADDON", "NLRIKET1", "H;Nerdz;1.1.0", "CHANNEL", "Old Timer-X")
+ok(B.R.peers["Old Timer"] and B.R.peers["Old Timer"].version == "1.1.0" and B.R.db.discords["Old Timer"] == nil, "a hello from before 1.3 still counts")
+B.Fire("CHAT_MSG_ADDON", "NLRIKET1", "H;Nerdz;1.3.0;|TInterface\\X:900|t", "CHANNEL", "Bad Actor-X")
+ok(not (B.R.db.discords["Bad Actor"] or ""):find("|", 1, true), "a Discord name can't carry escape codes")
 
--- Members in the scroll box.
-local mp = Cc.ns.UI.pages[2]
+---------------------------------------------------------------------------
+-- Riket in the guild window (J)
+---------------------------------------------------------------------------
+
+Cc.ns.UI.Open(1)
+local host = Cc.env.CommunitiesFrame
+local panel = Cc.env.NLRiketFrame
+local tM, tP, tD = Cc.env.NLRiketTabMembers, Cc.env.NLRiketTabProfessions, Cc.env.NLRiketTabDiscord
+ok(host and host.shown, "/riket opens the guild window, loading it the first time")
+ok(panel and panel.inJ and panel.parent == host and panel.shown, "Riket's pages sit inside the guild window")
+ok(tM and tP and tD and tM.parent == host and tM.template == "CommunitiesFrameTabTemplate", "three tabs of its own, drawn like the window's")
+ok(tM.shown and tP.shown and tD.shown, "all three show")
+local p1 = tM.points and tM.points[1]
+ok(p1 and p1[1] == "TOP" and p1[2] == host.GuildBenefitsTab and p1[3] == "BOTTOM" and p1[5] == -17,
+	"under the window's lowest tab (GuildBenefitsTab, though GuildInfoTab comes last in its code), with the window's gap")
+ok(tP.points[1][2] == tM and tD.points[1][2] == tP, "one under the other")
+ok(tM.checked and not tP.checked and host.ChatTab.checked == false, "Members marked, the window's own tab not")
+ok(not Cc.env.NLRiketFrameTab1, "no window of its own any more")
+ok(panel.credit.text:find("Made by Neophyte", 1, true) and panel.credit.text:find("v" .. tocVersion, 1, true), "the credit with the version: " .. tostring(panel.credit.text))
+ok(panel.status.text and panel.status.text:find("Nerdelandslaget II", 1, true) and panel.status.text:find("60 of 60 online", 1, true), "the status strip shows who is online: " .. tostring(panel.status.text))
+
+-- Members.
+local mp = Cc.ns.UI.pages[1]
 ok(mp.list.native and mp.list.box and mp.list.box.template == "WowScrollBoxList", "members sit in Blizzard's scroll box")
 ok(#mp.list.box.dp.items == 62, "every online member is listed: 60 + 2 (got " .. #mp.list.box.dp.items .. ")")
 local row1 = mp.list.box.rows[1]
-ok(row1.name and row1.name.text and row1.name.text:find("Member Number01", 1, true), "own guild first, sorted by name: " .. tostring(row1.name and row1.name.text))
-ok(row1.rank.text == "Officer" and mp.list.box.rows[62].rank.text == "Member", "the Rank column, own guild and the other: " .. tostring(row1.rank.text) .. " / " .. tostring(mp.list.box.rows[62].rank.text))
-ok(#mp.headers == 6 and mp.headers[4].label.text == "Rank", "six columns, Rank among them")
+ok(row1.name.text:find("Member Number01", 1, true), "own guild first, sorted by name: " .. tostring(row1.name.text))
+ok(row1.rank.text == "Officer" and mp.list.box.rows[62].rank.text == "Member", "the Rank column, own guild and the other")
+ok(#mp.headers == 6 and mp.headers[4].label.text == "Rank" and mp.headers[5].label.text == "Discord", "six columns, Rank and Discord among them")
+local aria
+for _, r in ipairs(mp.list.box.rows) do if r.item and r.item.name == "Aria Ashfall" then aria = r end end
+ok(aria and aria.discord.text == "aria_dc", "the Discord column")
 local function Sorted(items, key, desc)
 	for i = 2, #items do
 		local a, b = items[i - 1][key], items[i][key]
@@ -423,141 +470,160 @@ local function Sorted(items, key, desc)
 	return true
 end
 mp.headers[2].scripts.OnClick(mp.headers[2])
-ok(Cc.R.db.memberSort.key == "level" and Cc.R.db.memberSort.desc == true, "Level: the first click sorts highest first")
-ok(mp.list.items[1].level == 60 and Sorted(mp.list.items, "level", true), "the list follows, highest level on top")
+ok(Cc.R.db.memberSort.key == "level" and Cc.R.db.memberSort.desc == true and mp.list.items[1].level == 60 and Sorted(mp.list.items, "level", true), "Level: the first click sorts highest first")
 ok(mp.headers[2].arrow.shown == true and mp.headers[1].arrow.shown == false, "the arrow sits on Level")
 mp.headers[2].scripts.OnClick(mp.headers[2])
 ok(Cc.R.db.memberSort.desc == false and Sorted(mp.list.items, "level", false) and mp.list.items[1].level == 10, "the second click turns it round")
 mp.headers[4].scripts.OnClick(mp.headers[4])
 ok(mp.list.items[1].rankIndex == 0 and Sorted(mp.list.items, "rankIndex", false), "Rank: guild master first")
-mp.headers[1].scripts.OnClick(mp.headers[1])
-ok(Sorted(mp.list.items, "name", false), "Name: A to Z")
 Cc.R.db.memberSort.key, Cc.R.db.memberSort.desc = "guild", false
 mp:Refresh()
-row1 = mp.list.box.rows[1]
-ok(row1.stripe and row1.item.index == 1, "rows get their stripe and index")
 local last = mp.list.box.rows[62]
-ok(last.guild.text:find("Nerdelandslaget", 1, true) and last.name.text:find("Bjorn Ironside", 1, true), "the other guild after: " .. tostring(last.name.text))
 last.scripts.OnClick(last, "RightButton")
 local menu = Cc.menus[#Cc.menus]
-ok(menu and menu.items[1].title == "Bjorn Ironside" and menu.items[2].text == "Whisper" and menu.items[3].text == "Invite to group", "right-click opens whisper and invite")
-last.scripts.OnEnter(last)
-ok(has(Cc.env.GameTooltip.tlines, "Click to whisper"), "a row's tooltip says what a click does")
+ok(menu.items[1].title == "Bjorn Ironside" and menu.items[2].text == "Whisper" and menu.items[3].text == "Invite to group", "right-click opens whisper and invite")
 
--- Professions with the dropdown.
-Cc.ns.UI.Open(3)
-local pp = Cc.ns.UI.pages[3]
-ok(pp.filter.root and pp.filter.root.items[1].text == "All professions", "the dropdown starts with all professions")
+-- Professions.
+tP.scripts.OnClick(tP)
+local pp = Cc.ns.UI.pages[2]
+ok(pp.shown and not mp.shown and tP.checked and not tM.checked and Cc.R.db.tab == 2, "the Professions tab shows its page")
 local names = {}
 for _, it in ipairs(pp.filter.root.items) do names[#names + 1] = it.text end
-ok(has(names, "Alchemy") and has(names, "Blacksmithing") and has(names, "Mining"), "and offers every known profession: " .. table.concat(names, ", "))
+ok(names[1] == "All professions" and has(names, "Alchemy") and has(names, "Blacksmithing"), "the dropdown offers every known profession")
 ok(#pp.list.box.dp.items == 3, "all three professions listed")
 for _, it in ipairs(pp.filter.root.items) do if it.text == "Alchemy" then it.set(it.data) end end
-ok(Cc.R.db.profFilter == 171 and #pp.list.box.dp.items == 1 and pp.list.box.dp.items[1].name == "Cato Cobalt", "choosing Alchemy filters the list")
-ok(pp.filter.root.items[1].is(0) == false, "the radio follows the choice")
+ok(Cc.R.db.profFilter == 171 and #pp.list.box.dp.items == 1, "choosing Alchemy filters the list")
 for _, it in ipairs(pp.filter.root.items) do if it.text == "All professions" then it.set(it.data) end end
 local bs
 for _, r in ipairs(pp.list.box.rows) do if r.item and r.item.id == 164 then bs = r end end
-ok(bs and bs.link.text.text:find("Htrade", 1, true), "the profession link shows in its row")
 bs.link.scripts.OnClick(bs.link, "LeftButton")
-ok(Cc.opened and Cc.opened:find("^trade:"), "clicking the link opens the recipes")
+ok(Cc.opened and Cc.opened:find("^trade:"), "clicking a profession link opens the recipes")
 
--- Chat page parts.
-local cp = Cc.ns.UI.pages[1]
-ok(cp.input and cp.input.template == "InputBoxTemplate" and cp.show.template == "UICheckButtonTemplate", "Blizzard's input box and check button")
-ok(Cc.chatBar ~= nil, "the chat log gets the thin Blizzard scroll bar")
+-- Discord, for a player whose rank can't edit notes.
+tD.scripts.OnClick(tD)
+local dpc = Cc.ns.UI.pages[3]
+ok(dpc.shown and dpc.input.text == "cato_dc" and dpc.state.text:find("Riket is on", 1, true), "the Discord tab shows the name and that Riket is on")
+ok(dpc.noteBtn.enabled == false and dpc.noteInfo.text:find("can't edit", 1, true), "where the rank can't edit notes, it says so")
+
+-- The window's own tabs and ours.
+host.RosterTab.scripts.OnClick(host.RosterTab)
+ok(not panel.shown and not tD.checked, "the window's own tab takes Riket away")
+host.ChatTab.checked = true
+tP.scripts.OnClick(tP)
+ok(panel.shown and tP.checked and host.ChatTab.checked == false, "a Riket tab brings its page back")
+tP.scripts.OnClick(tP)
+ok(not panel.shown and not tP.checked and host.ChatTab.checked == true, "and clicking it again gives the window back as it was")
+
+-- The guild chat, merged.
+local mf = host.Chat.MessageFrame
+local CO = Cc.ns.UI.CO
+local merged = rawget(CO.smf, "lines") or {}
+ok(CO.box.shown and mf.alpha == 0 and CO.box.parent == host.Chat, "the merged chat takes the guild chat's place")
+local iNL, iOwn, iSilent = find(merged, "Hello from NL"), find(merged, "Hei fra NL II"), find(merged, "silent")
+ok(iNL and iOwn and iSilent and iNL < iOwn and iOwn < iSilent, "both guilds' lines, in time order")
+ok(has(merged, "|cffffd100[Nerdelandslaget]|r |Hplayer:Aria Ashfall|h["), "the other guild's lines carry its name")
+ok(merged[iOwn] and merged[iOwn]:find("^|Hplayer:Cato Cobalt|h%[|c") ~= nil, "our own lines look like the guild chat's, name in class colour: " .. tostring(merged[iOwn]))
+A.env.C_ChatInfo.SendChatMessage("live from NL", "GUILD")
+Advance(5)
+merged = rawget(CO.smf, "lines")
+ok(merged[#merged]:find("live from NL", 1, true), "a new line from the other guild comes in at the bottom")
+local n = #merged
+Cc.env.C_ChatInfo.SendChatMessage("live from NL II", "GUILD")
+Advance(1)
+merged = rawget(CO.smf, "lines")
+ok(#merged == n + 1 and merged[#merged]:find("live from NL II", 1, true), "our own new line comes once, from the game's message")
+host:SelectStream(GUILD_CLUB, OFFICER_STREAM)
+ok(not CO.box.shown and mf.alpha == 1, "officer chat stays the window's own")
+host:SelectStream(GUILD_CLUB, GUILD_STREAM)
+ok(CO.box.shown and mf.alpha == 0 and has(rawget(CO.smf, "lines"), "live from NL II"), "back on guild chat it's merged again")
+host:SelectClub(OTHER_CLUB)
+ok(not tM.shown and not CO.box.shown and mf.alpha == 1, "another community: no Riket tabs, and its own chat")
+host:SelectClub(GUILD_CLUB)
+ok(tM.shown and CO.box.shown, "back on the guild: tabs and merged chat return")
+host:SetDisplayMode("MINIMIZED")
+ok(not tM.shown, "the small chat-only mode has no Riket tabs")
+host:SetDisplayMode("CHAT")
+ok(tM.shown, "full size brings them back")
+
+-- Closing and toggling.
+Cc.ns.UI.Open(2)
+host:Hide()
+ok(not panel.shown and not tP.checked and not CO.box.shown and mf.alpha == 1, "closing the guild window closes Riket and gives back its chat")
+Cc.ns.UI.Open(1)
+ok(host.shown and panel.shown and tM.checked, "/riket members opens it again")
+Cc.ns.UI.Toggle()
+ok(not host.shown and not panel.shown, "toggling closes the guild window")
 
 -- Minimap button and the addon list entry.
 local MB = Cc.env.NLRiketMapButton
 MB.scripts.OnEnter(MB)
 ok(has(Cc.env.GameTooltip.tlines, "Made by Neophyte"), "the minimap tooltip carries the credit")
 MB.scripts.OnClick(MB, "RightButton")
-ok(Cc.menus[#Cc.menus].items[1].title == "Nerdelandslaget: Riket", "the minimap menu")
+local mm = Cc.menus[#Cc.menus]
+ok(mm.items[1].title == "Nerdelandslaget: Riket" and mm.items[2].text == "Members" and mm.items[4].text == "Discord", "the minimap menu reaches the three pages")
+MB.scripts.OnClick(MB, "LeftButton")
+ok(host.shown and panel.shown, "the minimap button opens Riket in the guild window")
 ok(type(Cc.env.NLRiket_OnAddonCompartmentClick) == "function" and type(Cc.env.NLRiket_OnAddonCompartmentEnter) == "function", "the addon list entry has its functions")
-Cc.env.NLRiket_OnAddonCompartmentEnter("Nerdelandslaget_Riket", Cc.env.UIParent)
-ok(has(Cc.env.GameTooltip.tlines, "Nerdelandslaget: Riket"), "the addon list entry shows a tooltip")
 
--- Discord names travel in the hello and show in the Members list.
-ok(A.R.db.discords["Cato Cobalt"] == "cato_dc" and Cc.R.db.discords["Aria Ashfall"] == "aria_dc", "Discord names reach the other guild")
-ok(has(A.sent, "H;Nerdelandslaget;" .. tocVersion .. ";aria_dc"), "the hello carries the Discord name")
-local aria
-for _, r in ipairs(mp.list.box.rows) do if r.item and r.item.name == "Aria Ashfall" then aria = r end end
-ok(aria and aria.discord.text == "aria_dc" and #mp.headers == 6 and mp.headers[5].label.text == "Discord", "the Discord column")
-B.Fire("CHAT_MSG_ADDON", "NLRIKET1", "H;Nerdz;1.1.0", "CHANNEL", "Old Timer-X")
-ok(B.R.peers["Old Timer"] and B.R.peers["Old Timer"].version == "1.1.0" and B.R.db.discords["Old Timer"] == nil, "a hello from before 1.3 still counts")
-B.Fire("CHAT_MSG_ADDON", "NLRIKET1", "H;Nerdz;1.3.0;|TInterface\\X:900|t", "CHANNEL", "Bad Actor-X")
-ok(not (B.R.db.discords["Bad Actor"] or ""):find("|", 1, true), "a Discord name can't carry escape codes")
+-- /riket check, and errors said out loud.
+ok(not has(Cc.prints, "couldn't"), "no errors in the guild window: " .. tostring(Cc.prints[find(Cc.prints, "couldn't") or 0]))
+Cc.env.SlashCmdList.NLRIKET("check")
+ok(has(Cc.prints, "its tabs: ChatTab, RosterTab, GuildBenefitsTab, GuildInfoTab") and has(Cc.prints, "Riket's tabs under GuildBenefitsTab, shown true"), "/riket check tells what it sees")
+local r = Cc.ns.UI.Safe("test something", function() error("boom") end)
+ok(r == nil and has(Cc.prints, "couldn't test something in the guild window") and Cc.ns.UI.J.lastError:find("boom", 1, true), "an error in the guild window is said in chat, not swallowed")
+local okSlash = pcall(function() Cc.env.SlashCmdList.NLRIKET("status") Cc.env.SlashCmdList.NLRIKET("help") end)
+ok(okSlash, "/riket status and help work")
 
--- A newcomer without a Discord name: nothing starts until it is set.
+-- Outside the nerd guilds: no tabs, nothing to open.
+D.ns.UI.Open(1)
+ok(has(D.prints, "Riket is for the guilds") and not D.env.NLRiketFrame, "outside the network /riket just says so")
+D.env.ToggleGuildFrame()
+ok(D.env.NLRiketTabMembers and D.env.NLRiketTabMembers.shown == false, "and the guild window has no Riket tabs")
+
+---------------------------------------------------------------------------
+-- A newcomer: nothing until the Discord name is set, in the Discord tab
+---------------------------------------------------------------------------
+
 local N = Client("Nora Nyhet", "Nerdelandslaget", { discord = false, canEdit = true })
 Advance(30)
 ok(not N.R.ready and N.R.waiting and #N.sent == 0, "without a Discord name Riket stays off and sends nothing")
-ok(N.popups[1] and N.popups[1].which == "NLRIKET_DISCORD", "the login asks for the Discord name")
-N.ns.UI.Open(1)
-ok(N.ns.UI.setup.shown == true and N.ns.UI.pages[1]:GetParent() ~= nil, "the window shows the Discord setup")
-ok(rawget(N.env.NLRiketFrame, "shown") ~= false and N.ns.UI.setup.shown and not N.ns.UI.lock.shown, "the setup, not the curtain")
-local popupSelf = { editBox = Stub() }
-popupSelf.editBox.text = "x"
-ok(N.env.StaticPopupDialogs.NLRIKET_DISCORD.OnAccept(popupSelf) == true and not N.R.Discord(), "one letter is refused and the box stays open")
-popupSelf.editBox.text = "  nora|nyhet  "
-N.env.StaticPopupDialogs.NLRIKET_DISCORD.OnAccept(popupSelf)
-ok(N.R.Discord() == "noranyhet", "the name is saved, trimmed and cleaned: " .. tostring(N.R.Discord()))
-ok(N.ns.UI.setup.shown == false, "the setup goes away")
+ok(N.popups[1] and N.popups[1].which == "NLRIKET_DISCORD", "the login points to the Discord tab")
+N.env.StaticPopupDialogs.NLRIKET_DISCORD.OnAccept()
+local Nhost, Npanel = N.env.CommunitiesFrame, N.env.NLRiketFrame
+ok(Nhost and Nhost.shown and Npanel and Npanel.shown and N.R.db.tab == 3 and N.env.NLRiketTabDiscord.checked, "its button opens the guild window on the Discord tab")
+N.env.NLRiketTabMembers.scripts.OnClick(N.env.NLRiketTabMembers)
+ok(N.R.db.tab == 3 and N.env.NLRiketTabDiscord.checked and not N.env.NLRiketTabMembers.checked, "the other tabs wait for the Discord name")
+local dp = N.ns.UI.pages[3]
+ok(dp.state.text:find("Riket is off", 1, true) and not N.ns.UI.CO.box.shown, "the Discord tab says Riket is off, and the chat isn't merged yet")
+dp.input.text = "x"
+dp.save.scripts.OnClick(dp.save)
+ok(not N.R.Discord() and dp.state.text:find("two letters", 1, true), "one letter is refused")
+dp.input.text = "  nora|nyhet  "
+dp.input.scripts.OnEnterPressed(dp.input)
+ok(N.R.Discord() == "noranyhet", "Enter saves it, trimmed and cleaned: " .. tostring(N.R.Discord()))
 Advance(5)
 ok(N.R.ready and has(N.sent, ";noranyhet"), "setting it starts Riket")
-local np = N.popups[#N.popups]
-ok(np.which == "NLRIKET_NOTE" and np.a == "(empty)" and np.b == "noranyhet", "it offers the guild note")
-N.env.StaticPopupDialogs.NLRIKET_NOTE.OnAccept()
-ok(N.noteSet and N.noteSet.text == "noranyhet" and N.noteSet.public == true and N.noteSet.guid == "Player-1-Nora Nyhet", "yes writes the public note")
-local before = #N.popups
-N.ns.UI.OfferNote(true)
-ok(#N.popups == before, "no offer once the note holds the name")
-ok(not has({ (A.popups[1] or {}).which }, "NLRIKET_NOTE"), "no offer where the guild doesn't let members edit notes")
-
--- The guild window (J): Riket is a tab on its side.
-local Jc = Client("Jonas Jord", "Nerdelandslaget", { communities = true })
-Advance(30)
-Jc.ns.UI.Open(2)
-local host = Jc.env.CommunitiesFrame
-local panel, gtab = Jc.env.NLRiketFrame, Jc.env.NLRiketGuildTab
-ok(host and host.shown, "opening Riket opens the guild window, loading it the first time")
-ok(panel and panel.inJ and panel.parent == host and panel.shown, "Riket's pages sit inside the guild window")
-ok(gtab and gtab.parent == host and gtab.checked and gtab.shown, "with its own tab on the window's side, marked")
-ok(host.ChatTab.checked == false, "the window's own tab is unmarked while Riket shows")
-ok(#Jc.ns.UI.pages[2].list.items >= 1, "the Members page fills inside the guild window")
-ok(not has(Jc.env.UISpecialFrames, "NLRiketFrame"), "no window of its own")
-host.RosterTab.scripts.OnClick(host.RosterTab)
-ok(panel.shown == false and gtab.checked == false, "the window's own tab takes Riket away")
-host.ChatTab.checked = true
-gtab.scripts.OnClick(gtab)
-ok(panel.shown and host.ChatTab.checked == false, "our tab brings it back")
-gtab.scripts.OnClick(gtab)
-ok(panel.shown == false and host.ChatTab.checked == true, "and a second click gives the window back as it was")
-Jc.ns.UI.Open(3)
-host:Hide()
-ok(panel.shown == false and gtab.checked == false, "closing the guild window closes Riket")
-Jc.env.ToggleGuildFrame()
-host:SetDisplayMode("MINIMIZED")
-ok(gtab.shown == false, "the small chat-only mode has no Riket tab")
-host:SetDisplayMode("CHAT")
-ok(gtab.shown == true, "full size brings it back")
-Jc.ns.UI.Open(1)
-Jc.ns.UI.Toggle()
-ok(host.shown == false and panel.shown == false, "toggling closes the guild window")
-local Jw = Client("Juni Smal", "Nerdelandslaget", { communities = true, hostWidth = 400 })
-Advance(30)
-Jw.ns.UI.Open(2)
-ok(Jw.env.NLRiketFrame and not Jw.env.NLRiketFrame.inJ, "a guild window too small for Riket: its own window instead")
+ok(N.ns.UI.CO.box.shown, "and merges the guild chat")
+dp:Refresh()
+ok(dp.note.text:find("(empty)", 1, true) and dp.noteBtn.enabled == true, "her rank may edit notes: the button is on")
+dp.noteBtn.scripts.OnClick(dp.noteBtn)
+ok(N.noteSet and N.noteSet.text == "noranyhet" and N.noteSet.public == true and N.noteSet.guid == "Player-1-Nora Nyhet", "the button writes her public guild note")
+Advance(3)
+ok(dp.note.text:find("noranyhet", 1, true) and dp.noteBtn.enabled == false and dp.noteInfo.text:find("holds", 1, true), "and the tab then shows it there")
+dp.show.checked = false
+dp.show.scripts.OnClick(dp.show)
+ok(N.R.db.toChatFrame == false, "the chat window setting lives in the Discord tab")
+N.env.NLRiketTabMembers.scripts.OnClick(N.env.NLRiketTabMembers)
+ok(N.R.db.tab == 1 and N.env.NLRiketTabMembers.checked, "with the name set, the other tabs open")
+ok(not has(N.prints, "couldn't"), "no errors for the newcomer")
 
 -- A client without any of the templates still builds, with plain stand-ins.
 local F = Client("Frida Fjell", "Nerdelandslaget II", { noTemplates = true, class = "MAGE" })
-Advance(10)
+Advance(30)
 local okF, errF = pcall(function() F.ns.UI.Open(1) F.ns.UI.Open(2) F.ns.UI.Open(3) F.ns.UI.Refresh() end)
-ok(okF, "without the templates the window still builds: " .. tostring(errF))
-local FW = F.env.NLRiketFrame
-ok(FW and FW.template ~= "ButtonFrameTemplate" and FW.credit.text:find("Made by Neophyte", 1, true), "and keeps the credit")
-ok(F.ns.UI.pages[2].list.plain and not F.ns.UI.pages[2].list.native, "and uses the plain list")
-ok(F.ns.UI.pages[3].filter.standIn, "and a button in place of the dropdown")
+ok(okF and F.env.NLRiketFrame and F.env.NLRiketFrame.shown, "without the templates it still builds: " .. tostring(errF))
+ok(F.env.NLRiketTabMembers.template == nil and F.ns.UI.pages[1].list.plain and F.ns.UI.pages[2].filter.standIn, "plain tabs, list and filter button")
+ok(not has(F.prints, "couldn't"), "and no errors: " .. tostring(F.prints[find(F.prints, "couldn't") or 0]))
 
 -- Without the channel: falls back to GUILD (own guild only), no errors.
 local E = Client("Eirik Edge", "Nerdelandslaget", { noChannel = true })

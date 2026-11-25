@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: |cffe8642bNerdelandslaget:|r Riket
-## Notes: One guild chat, who is online and everyone's professions with links, for every guild with "nerd" in its name. Made by Neophyte.
+## Notes: The nerd guilds in the guild window (J): one guild chat, who is online in every guild, everyone's professions with links, and each player's Discord name. Made by Neophyte.
 ## Author: Neophyte
-## Version: 1.3.0
+## Version: 1.4.0
 ## SavedVariables: NLRiketDB
 ## SavedVariablesPerCharacter: NLRiketCharDB
 ## IconTexture: Interface\AddOns\Nerdelandslaget_Riket\media\logo64
