@@ -973,13 +973,20 @@ local function SideTab(i, spec)
 	return t
 end
 
+local STRATA_ABOVE = { BACKGROUND = "LOW", LOW = "MEDIUM", MEDIUM = "HIGH", HIGH = "DIALOG", DIALOG = "FULLSCREEN",
+	FULLSCREEN = "FULLSCREEN_DIALOG", FULLSCREEN_DIALOG = "FULLSCREEN_DIALOG" }
+
 -- The panel Riket's pages are built into: the guild window's size, its own background and
 -- inset over the window's content, leaving the title bar, close button and portrait alone.
 function J.Panel()
 	local host = Host()
 	local f = CreateFrame("Frame", "NLRiketFrame", host)
 	f:SetAllPoints(host)
-	f:SetFrameLevel((R.Plain(host:GetFrameLevel()) or 0) + 200)
+	-- one stratum above the window, so none of its own parts (its chat box has a high level of
+	-- its own) shows through
+	local strata = R.Plain(host:GetFrameStrata())
+	f:SetFrameStrata(STRATA_ABOVE[strata] or "HIGH")
+	f:SetFrameLevel((R.Plain(host:GetFrameLevel()) or 0) + 10)
 	f.inJ = true
 	local function Cover(l, t, r, b, h)
 		local c = CreateFrame("Frame", nil, f)
@@ -1115,8 +1122,10 @@ local function ClassOf(name)
 end
 
 -- "[Name]: text" for our guild, "[Guild] [Name]: text" for the others, with the chat's own
--- time stamps when the player has them on.
-function CO.Text(guild, name, text, class, t)
+-- time stamps when the player has them on. raw: text from the game itself (its guild chat
+-- history), shown as the game gives it: on Forever that is a protected code the game draws as
+-- the message. Text from other players' addons is always made safe first.
+function CO.Text(guild, name, text, class, t, raw)
 	local who = "|Hplayer:" .. name .. "|h[" .. (class and R.ClassName(name, class) or name) .. "]|h"
 	local stamp = ""
 	if CHAT_TIMESTAMP_FORMAT and BetterDate and t then
@@ -1124,7 +1133,7 @@ function CO.Text(guild, name, text, class, t)
 		if ok and type(s) == "string" then stamp = s end
 	end
 	local tag = (guild and guild ~= R.MyGuild()) and ("|cffffd100[" .. guild .. "]|r ") or ""
-	return stamp .. tag .. who .. ": " .. Chat.SafeText(text)
+	return stamp .. tag .. who .. ": " .. (raw and tostring(text) or Chat.SafeText(text))
 end
 
 -- One of the game's guild chat messages as a line, or nil (deleted, or a secret in an encounter).
@@ -1136,7 +1145,7 @@ function CO.FromClub(m)
 	if not name then return nil end
 	local epoch = type(m.messageId) == "table" and R.Plain(m.messageId.epoch)
 	return { t = type(epoch) == "number" and epoch / 1e6 or time(), guild = R.MyGuild(), name = name, text = content,
-		class = author.classID and R.ClassFile(author.classID) or ClassOf(name) }
+		class = author.classID and R.ClassFile(author.classID) or ClassOf(name), raw = true }
 end
 
 -- The guild's chat as the game holds it, oldest first (its latest stretch of history).
@@ -1179,12 +1188,12 @@ function CO.Attach(host)
 	smf:SetScript("OnHyperlinkClick", function(self, link, text, button)
 		if SetItemRef then pcall(SetItemRef, link, text, button, self) end
 	end)
-	-- a scroll bar of the same kind where the window's own was
-	local barTemplate = (HasTemplate("WowTrimScrollBar") and "WowTrimScrollBar") or (HasTemplate("MinimalScrollBar") and "MinimalScrollBar")
-	if bar and barTemplate and ScrollUtil and ScrollUtil.InitScrollingMessageFrameWithScrollBar then
-		local ours = CreateFrame("EventFrame", nil, box, barTemplate)
-		ours:SetPoint("TOPLEFT", bar, "TOPLEFT")
-		ours:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT")
+	-- Blizzard's thin scroll bar, centred in the window's own bar's place (a wider one spills
+	-- over the member list next to it)
+	if bar and HasTemplate("MinimalScrollBar") and ScrollUtil and ScrollUtil.InitScrollingMessageFrameWithScrollBar then
+		local ours = CreateFrame("EventFrame", nil, box, "MinimalScrollBar")
+		ours:SetPoint("TOP", bar, "TOP", 0, -4)
+		ours:SetPoint("BOTTOM", bar, "BOTTOM", 0, 4)
 		if not pcall(ScrollUtil.InitScrollingMessageFrameWithScrollBar, smf, ours) then ours:Hide() end
 		CO.ourBar = ours
 	end
@@ -1228,7 +1237,7 @@ function CO.Fill()
 	end
 	for _, e in ipairs(R.db.chatLog) do
 		if e.o or not CO.clubMode then   -- the other guilds; our own too when the game's history isn't there
-			lines[#lines + 1] = { t = e.t, guild = e.g, name = e.a, text = e.x, class = ClassOf(e.a), i = #lines + 1 }
+			lines[#lines + 1] = { t = e.t, guild = e.g, name = e.a, text = e.x, class = ClassOf(e.a), raw = e.p, i = #lines + 1 }
 		end
 	end
 	table.sort(lines, function(a, b)
@@ -1238,7 +1247,7 @@ function CO.Fill()
 	local r, g, b = Chat.Color()
 	for k = math.max(1, #lines - 499), #lines do
 		local l = lines[k]
-		smf:AddMessage(CO.Text(l.guild, l.name, l.text, l.class, l.t), r, g, b)
+		smf:AddMessage(CO.Text(l.guild, l.name, l.text, l.class, l.t, l.raw), r, g, b)
 	end
 end
 
@@ -1248,7 +1257,7 @@ function CO.Add(e)
 	if not (CO.box and CO.box:IsShown()) then return end
 	if not e.o and CO.clubMode then return end
 	local r, g, b = Chat.Color()
-	CO.smf:AddMessage(CO.Text(e.g, e.a, e.x, ClassOf(e.a), e.t), r, g, b)
+	CO.smf:AddMessage(CO.Text(e.g, e.a, e.x, ClassOf(e.a), e.t, e.p), r, g, b)
 end
 
 R.On("CLUB_MESSAGE_ADDED", function(clubId, streamId, messageId)
@@ -1259,7 +1268,7 @@ R.On("CLUB_MESSAGE_ADDED", function(clubId, streamId, messageId)
 	local line = ok and CO.FromClub(m)
 	if line then
 		local r, g, b = Chat.Color()
-		CO.smf:AddMessage(CO.Text(line.guild, line.name, line.text, line.class, line.t), r, g, b)
+		CO.smf:AddMessage(CO.Text(line.guild, line.name, line.text, line.class, line.t, true), r, g, b)
 	end
 end)
 
@@ -1296,7 +1305,7 @@ R.OnChange(function(what, e)
 	if what == "needsDiscord" then UI.AskDiscord() end
 	if what == "chat" and e then Safe("merge the guild chat", CO.Add, e) end
 	if not frame or not frame:IsShown() then return end
-	if what == "members" or what == "profs" or what == "peer" or what == "ready" or what == "guild" or what == "discord" then
+	if what == "members" or what == "profs" or what == "peer" or what == "ready" or what == "guild" or what == "discord" or what == "me" then
 		UI.Refresh()
 	end
 end)

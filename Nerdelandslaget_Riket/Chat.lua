@@ -40,9 +40,9 @@ function Chat.Color()
 	return 0.25, 1, 0.25
 end
 
-local function Log(guild, author, text, other)
+local function Log(guild, author, text, other, protected)
 	local log = R.db.chatLog
-	local e = { t = time(), g = guild, a = author, x = text, o = other or nil }
+	local e = { t = time(), g = guild, a = author, x = text, o = other or nil, p = protected or nil }
 	log[#log + 1] = e
 	while #log > Chat.LOG_MAX do table.remove(log, 1) end
 	R.Changed("chat", e)
@@ -77,7 +77,17 @@ R.On("CHAT_MSG_GUILD", function(text, sender)
 	local guild = R.MyGuild()
 	local author = R.Name(sender)
 	if not guild or not author or not R.db then return end
-	Log(guild, author, text, false)
+	-- Text the game hands addons only as a protected code (|K...|k) shows right here, but means
+	-- nothing on another player's client: it is kept, not repeated.
+	local protected = text:find("|K", 1, true) ~= nil
+	Log(guild, author, text, false, protected)
+	if protected then
+		if not Chat.toldProtected then
+			Chat.toldProtected = true
+			R.Print("the game hides guild chat text from addons here, so Riket can't pass it to the other guilds.")
+		end
+		return
+	end
 	if R.ready and R.IAmRelay() and R.OtherGuildOnline() then
 		local head = "C;" .. guild .. ";" .. author .. ";"
 		R.Send(head .. R.Cut(text, R.MAX_BYTES - #head))

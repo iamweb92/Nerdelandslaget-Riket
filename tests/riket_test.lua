@@ -44,6 +44,7 @@ local function Stub(name)
 		if k == "AddMessage" then return function(self, line) local l = rawget(self, "lines") or {} rawset(self, "lines", l) table.insert(l, line) end end
 		if k == "Clear" then return function(self) rawset(self, "lines", {}) end end
 		if k == "SetAlpha" then return function(self, a) self.alpha = a end end
+		if k == "SetFrameStrata" then return function(self, v) self.strata = v end end
 		if k == "SetPoint" then return function(self, ...) local p = rawget(self, "points") or {} rawset(self, "points", p) p[#p + 1] = { ... } end end
 		if k == "ClearAllPoints" then return function(self) rawset(self, "points", {}) end end
 		if k == "SetEnabled" then return function(self, v) self.enabled = v and true or false end end
@@ -69,7 +70,7 @@ local GUILD_CLUB, GUILD_STREAM, OFFICER_STREAM, OTHER_CLUB = "club-guild", "stre
 local function Client(name, guild, opts)
 	opts = opts or {}
 	local env = setmetatable({}, { __index = _G })
-	local c = { name = name, guild = guild, env = env, frames = {}, sent = {}, chat = {}, clubMessages = {} }
+	local c = { name = name, guild = guild, env = env, frames = {}, sent = {}, chat = {}, clubMessages = {}, opts = opts }
 	env._G = env
 	env.time = function() return now end
 	env.GetTime = function() return now end
@@ -156,7 +157,7 @@ local function Client(name, guild, opts)
 	env.ChatTypeInfo = { GUILD = { r = 0.25, g = 1, b = 0.25 } }
 	env.RAID_CLASS_COLORS = { WARRIOR = { r = 0.78, g = 0.61, b = 0.43 }, MAGE = { r = 0.25, g = 0.78, b = 0.92 } }
 	env.issecretvalue = function(v) return v == "SECRET" end
-	env.UnitName = function() return name end
+	env.UnitName = function() if opts.fullUnitName then return name end return (name:match("^(%S+)")) end
 	env.UnitClass = function() return "Warrior", opts.class or "WARRIOR" end
 	env.UnitLevel = function() return opts.level or 60 end
 	env.IsInGuild = function() return c.guild ~= nil end
@@ -166,7 +167,8 @@ local function Client(name, guild, opts)
 	env.GetGuildRosterInfo = function(i)
 		local r = roster[i]
 		local note = (c.notes and c.notes[r[1]]) or r[7] or ""
-		return r[1] .. "-CAMWOWEU5Realm2PvP", r[6] or "Member", r[5] or 3, r[2], "Class", "Stormwind", note, "", r[4], 0, r[3]
+		return r[1] .. "-CAMWOWEU5Realm2PvP", r[6] or "Member", r[5] or 3, r[2], "Class", "Stormwind", note, "", r[4], 0, r[3],
+			0, 0, false, false, 0, (not opts.noGuid) and ("Player-1-" .. r[1]) or nil
 	end
 	c.notes = {}
 	env.C_GuildInfo = {
@@ -248,7 +250,7 @@ local function Client(name, guild, opts)
 			assert(#text <= 255, "addon message too long: " .. #text)
 			c.sent[#c.sent + 1] = text
 			for _, o in ipairs(clients) do
-				if o ~= c and o.loaded and ((dist == "CHANNEL" and o.joined) or (dist == "GUILD" and o.guild == c.guild)) then
+				if o.loaded and ((dist == "CHANNEL" and o.joined) or (dist == "GUILD" and o.guild == c.guild)) then
 					o.Fire("CHAT_MSG_ADDON", prefix, text, dist, name .. "-CAMWOWEU5Realm2PvP")
 				end
 			end
@@ -259,8 +261,9 @@ local function Client(name, guild, opts)
 			for _, o in ipairs(clients) do
 				if o.guild == c.guild then
 					local id = { epoch = now * 1e6, position = #o.clubMessages + 1 }
-					o.clubMessages[#o.clubMessages + 1] = { messageId = id, author = { name = name .. "-CAMWOWEU5Realm2PvP", classID = opts.class == "MAGE" and 8 or 1 }, content = text }
-					o.Fire("CHAT_MSG_GUILD", text, name .. "-CAMWOWEU5Realm2PvP")
+					local shown = o.opts.protectedChat and ("|Kw" .. (4999 + id.position) .. "|k") or text
+					o.clubMessages[#o.clubMessages + 1] = { messageId = id, author = { name = name .. "-CAMWOWEU5Realm2PvP", classID = opts.class == "MAGE" and 8 or 1 }, content = shown }
+					o.Fire("CHAT_MSG_GUILD", shown, name .. "-CAMWOWEU5Realm2PvP")
 					o.Fire("CLUB_MESSAGE_ADDED", GUILD_CLUB, GUILD_STREAM, id)
 				end
 			end
@@ -616,6 +619,44 @@ ok(N.R.db.toChatFrame == false, "the chat window setting lives in the Discord ta
 N.env.NLRiketTabMembers.scripts.OnClick(N.env.NLRiketTabMembers)
 ok(N.R.db.tab == 1 and N.env.NLRiketTabMembers.checked, "with the name set, the other tabs open")
 ok(not has(N.prints, "couldn't"), "no errors for the newcomer")
+
+---------------------------------------------------------------------------
+-- Forever's names: the game gives us only "Aria", everyone else sees "Aria Ashfall"
+---------------------------------------------------------------------------
+
+ok(A.env.UnitName("player") == "Aria" and A.R.Me() == "Aria Ashfall" and Cc.R.Me() == "Cato Cobalt", "our whole name: by our GUID in the roster (Aria), or by our own hello coming back (Cato, not in his test roster)")
+ok(A.R.db.crafters["Aria"] == nil and A.R.db.crafters["Aria Ashfall"] ~= nil, "our professions are kept once, under our whole name")
+local mine = 0
+for _, row in ipairs(A.ns.Prof.Rows(0)) do if row.name:find("^Aria") then mine = mine + 1 end end
+ok(mine == 2, "and listed once each, as ours (got " .. mine .. ")")
+local G = Client("Gro Gullsmed", "Nerdelandslaget", { noGuid = true, roster = { { "Gro Gullsmed", 30, "WARRIOR", true }, { "Groa Stein", 20, "MAGE", true } } })
+Advance(15)
+ok(G.R.Me() == "Gro Gullsmed", "without GUIDs: the only roster name that starts with ours (\"Groa Stein\" doesn't)")
+local Hh = Client("Hans Hval", "Nerdelandslaget", { noGuid = true, roster = { { "Hans Hval", 30, "WARRIOR", true }, { "Hans Hogg", 20, "MAGE", true } } })
+Advance(15)
+ok(Hh.R.Me() == "Hans Hval", "two roster names start with ours: our own hello coming back tells which (got " .. tostring(Hh.R.Me()) .. ")")
+ok(Hh.R.db.discords["Hans"] == nil and Hh.R.db.discords["Hans Hval"] == "hans_dc", "and nothing stays under the short name")
+
+---------------------------------------------------------------------------
+-- Guild chat text the game only hands addons as a protected code
+---------------------------------------------------------------------------
+
+local K = Client("Kari Kode", "Nerdelandslaget II", { protectedChat = true, class = "MAGE" })
+Advance(15)
+K.ns.UI.Open(3)
+host = K.env.CommunitiesFrame
+host.RosterTab.scripts.OnClick(host.RosterTab)   -- (back to the window's own view, its guild chat)
+local sentBefore = #K.sent
+K.env.C_ChatInfo.SendChatMessage("secret plans", "GUILD")
+Advance(3)
+local kLines = rawget(K.ns.UI.CO.smf, "lines") or {}
+ok(K.ns.UI.CO.box.shown and has(kLines, "|Kw") and not has(kLines, "||Kw"), "the game's protected text goes to the merged chat as the game gave it, for it to draw")
+local relayed = false
+for i = sentBefore + 1, #K.sent do if K.sent[i]:find("^C;") then relayed = true end end
+ok(not relayed, "it is not passed to the other guilds, where it would mean nothing")
+ok(has(K.prints, "hides guild chat text from addons"), "and Riket says so once")
+ok(K.env.NLRiketFrame.strata == "HIGH", "Riket's panel lies a layer above the guild window, so its chat box doesn't show through")
+ok(K.ns.UI.CO.ourBar and K.ns.UI.CO.ourBar.template == "MinimalScrollBar" and K.ns.UI.CO.ourBar.points[1][1] == "TOP", "the merged chat's scroll bar is the thin one, centred in the window's bar's place")
 
 -- A client without any of the templates still builds, with plain stand-ins.
 local F = Client("Frida Fjell", "Nerdelandslaget II", { noTemplates = true, class = "MAGE" })

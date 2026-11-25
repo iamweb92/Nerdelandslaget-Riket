@@ -122,7 +122,48 @@ function R.Name(full)
 	return full:match("^([^%-]+)") or full
 end
 
-function R.Me() return R.Name(UnitName("player")) end
+-- Forever's names are "First Surname", and the game may give us only the first part of our own
+-- (while the roster and everyone else see the whole). Our full name is found by our GUID in the
+-- guild roster, by being the only roster name that starts with ours, or by hearing our own
+-- hello come back on the channel.
+function R.Me()
+	return R.fullName or R.Name(UnitName("player"))
+end
+
+function R.LearnName(full)
+	full = R.Name(full)
+	if not full or full == R.fullName then return end
+	local short = R.Name(UnitName("player"))
+	R.fullName = full
+	if R.db and short and short ~= full then   -- what was kept under the short name was us
+		R.db.crafters[short] = nil
+		R.db.discords[short] = nil
+	end
+	if R.db and R.Discord() then R.db.discords[full] = R.Discord() end
+	R.Log("my name", full)
+	R.Changed("me")
+end
+
+function R.FindMyName()
+	if R.fullName then return R.fullName end
+	local short = R.Name(UnitName("player"))
+	if short and short:find(" ", 1, true) then R.LearnName(short) return short end
+	if not (GetNumGuildMembers and GetGuildRosterInfo) then return nil end
+	local guid = UnitGUID and R.Plain(UnitGUID("player"))
+	local prefix = short and (short .. " ")
+	local match, count = nil, 0
+	for i = 1, R.Plain((GetNumGuildMembers())) or 0 do
+		local res = { pcall(GetGuildRosterInfo, i) }
+		local name = res[1] and R.Name(R.Plain(res[2]))
+		if name then
+			if guid and R.Plain(res[18]) == guid then R.LearnName(name) return name end
+			if name == short then return nil end   -- the game's name is our whole name after all
+			if prefix and name:sub(1, #prefix) == prefix then match, count = name, count + 1 end
+		end
+	end
+	if count == 1 then R.LearnName(match) return match end
+	return nil
+end
 
 -- Is this a guild of the network? Every guild with "nerd" in its name, any case.
 function R.IsNerdGuild(name)
@@ -317,7 +358,12 @@ R.On("CHAT_MSG_ADDON", function(prefix, text, channel, sender)
 	if not R.MyGuild() then return end   -- outside the network we hear nothing
 	if not R.Discord() then return end   -- nor before the Discord name is set
 	local who = R.Name(sender)
-	if not who or who == R.Me() then return end
+	if not who then return end
+	if not R.fullName and R.lastHello and text == R.lastHello and who ~= R.Me() then
+		local short = R.Me()
+		if short and who:sub(1, #short + 1) == short .. " " then R.LearnName(who) end   -- our own hello, under our whole name
+	end
+	if who == R.Me() then return end
 	local kind, rest = text:match("^(%u);?(.*)$")
 	local fn = kind and handlers[kind]
 	if not fn then return end
@@ -433,7 +479,10 @@ end)
 
 function R.Hello()
 	local g = R.MyGuild()
-	if g then R.Send("H;" .. g .. ";" .. R.VERSION .. ";" .. (R.Discord() or ""), "H") end
+	if g then
+		R.lastHello = "H;" .. g .. ";" .. R.VERSION .. ";" .. (R.Discord() or "")
+		R.Send(R.lastHello, "H")
+	end
 end
 
 ---------------------------------------------------------------------------
@@ -483,6 +532,7 @@ end)
 local loggedIn, starting = false, false
 Start = function()
 	if R.ready or starting or not loggedIn then return end
+	R.FindMyName()
 	if not R.Discord() then
 		R.waiting = true
 		R.Changed("needsDiscord")

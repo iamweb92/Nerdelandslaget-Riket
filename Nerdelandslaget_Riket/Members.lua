@@ -53,6 +53,7 @@ function M.ReadOwn()
 		end
 	end
 	M.guilds[g] = { list = list, online = #list, members = total, t = time(), own = true, ranks = ranks }
+	if not R.fullName then R.FindMyName() end
 	return M.guilds[g]
 end
 
