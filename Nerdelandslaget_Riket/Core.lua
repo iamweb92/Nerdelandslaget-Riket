@@ -12,6 +12,9 @@
 --   O;guild;stamp;part;parts;online;members;entries
 --                                         who is online in that guild, sent by its relay
 --                                         entries: name,level,classID joined by '/'
+--   F;guild;stamp;part;parts;entries      who in that guild is offline, last online within 30
+--                                         days, newest first; sent by its relay now and then, when
+--                                         nothing else waits. entries: name,level,classID,rank,days
 --   P;guild;classID;level;professions     my professions: skillLine.rank.max joined by ','
 --   K;skillLine;link                      the link to one of my professions
 --   Q                                     please send me your professions
@@ -42,6 +45,9 @@ local DEFAULTS = {
 	profFilter = 0,       -- 0 = every profession
 	profOffline = false,  -- the professions list shows players who are offline too
 	memberSort = { key = "guild", desc = false },   -- the Members list's sort: name, level, guild, rank or zone
+	memberOffline = false, -- the Members list shows members who are offline too
+	roster = {},          -- [name] = { g = guild, l = level, c = class, r = rank index, s = when last online }
+	ranks = {},           -- [guild] = { [index] = rank name }
 	mapButton = true,
 	mapAngle = 200,
 	debug = false,
@@ -271,6 +277,8 @@ end
 
 local BURST, REFILL, QUEUE_MAX = 5, 1.25, 60   -- messages at once, seconds per new one, waiting at most
 local queue, tokens, lastRefill = {}, BURST, 0
+local later = {}   -- what can wait (who is offline): sent only when the queue is empty, one message
+                   -- always kept back for the guild chat
 
 function R.ChannelID()
 	local id = GetChannelName and GetChannelName(R.CHANNEL)
@@ -325,7 +333,7 @@ local function Flush()
 	local now = GetTime()
 	tokens = math.min(BURST, tokens + (now - lastRefill) / REFILL)
 	lastRefill = now
-	if #queue == 0 then return end
+	if #queue == 0 and #later == 0 then return end
 	if C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown() then return end
 	while #queue > 0 and tokens >= 1 do
 		if SendOne(queue[1]) then
@@ -333,22 +341,33 @@ local function Flush()
 			tokens = tokens - 1
 		else
 			tokens = 0
-			break
+			return
+		end
+	end
+	while #queue == 0 and #later > 0 and tokens >= 2 do
+		if SendOne(later[1]) then
+			table.remove(later, 1)
+			tokens = tokens - 1
+		else
+			tokens = 0
+			return
 		end
 	end
 end
 
 -- key: a newer message with the same key replaces one still waiting in the queue.
-function R.Send(text, key)
+-- canWait: it goes after everything else (see `later`).
+function R.Send(text, key, canWait)
 	if not R.ready then return end
+	local q = canWait and later or queue
 	local m = { text = R.Cut(text, R.MAX_BYTES), key = key }
 	if key then
-		for i, q in ipairs(queue) do
-			if q.key == key then queue[i] = m return end
+		for i, w in ipairs(q) do
+			if w.key == key then q[i] = m return end
 		end
 	end
-	if #queue >= QUEUE_MAX then table.remove(queue, 1) end
-	queue[#queue + 1] = m
+	if #q >= QUEUE_MAX then table.remove(q, 1) end
+	q[#q + 1] = m
 end
 
 local handlers = {}

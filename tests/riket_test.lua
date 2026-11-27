@@ -170,6 +170,11 @@ local function Client(name, guild, opts)
 		return r[1] .. "-CAMWOWEU5Realm2PvP", r[6] or "Member", r[5] or 3, r[2], "Class", "Stormwind", note, "", r[4], 0, r[3],
 			0, 0, false, false, 0, (not opts.noGuid) and ("Player-1-" .. r[1]) or nil
 	end
+	env.GetGuildRosterLastOnline = function(i)
+		local r = roster[i]
+		if not r or r[4] then return nil end
+		return 0, 0, r[8] or 0, 0
+	end
 	c.notes = {}
 	env.C_GuildInfo = {
 		GuildRoster = function() end,
@@ -249,6 +254,8 @@ local function Client(name, guild, opts)
 		SendAddonMessage = function(prefix, text, dist, target)
 			assert(#text <= 255, "addon message too long: " .. #text)
 			c.sent[#c.sent + 1] = text
+			c.sentAt = c.sentAt or {}
+			c.sentAt[#c.sent] = now
 			for _, o in ipairs(clients) do
 				if o.loaded and ((dist == "CHANNEL" and o.joined) or (dist == "GUILD" and o.guild == c.guild)) then
 					o.Fire("CHAT_MSG_ADDON", prefix, text, dist, name .. "-CAMWOWEU5Realm2PvP")
@@ -321,12 +328,14 @@ end
 
 -- Two guilds: Aria and Bjorn in <Nerdelandslaget>, Cato in <Nerdelandslaget II>; Dina is in no
 -- nerd guild.
-local A = Client("Aria Ashfall", "Nerdelandslaget", { roster = { { "Aria Ashfall", 60, "WARRIOR", true }, { "Bjorn Ironside", 58, "MAGE", true }, { "Offline Olaf", 40, "MAGE", false } },
+local A = Client("Aria Ashfall", "Nerdelandslaget", { roster = { { "Aria Ashfall", 60, "WARRIOR", true }, { "Bjorn Ironside", 58, "MAGE", true },
+	{ "Offline Olaf", 40, "MAGE", false, 3, "Member", nil, 2 }, { "Gone Gunnar", 20, "WARRIOR", false, 3, "Member", nil, 90 } },
 	profs = { [164] = { 250, 300 }, [186] = { 280, 300 } } })
 local B = Client("Bjorn Ironside", "Nerdelandslaget", { class = "MAGE", roster = { { "Aria Ashfall", 60, "WARRIOR", true }, { "Bjorn Ironside", 58, "MAGE", true } } })
 local bigRoster = {}
 local RANKS = { [0] = "Guild Master", "Officer", "Veteran", "Member" }
 for i = 1, 60 do bigRoster[i] = { ("Member Number%02d"):format(i), 10 + i % 50, "MAGE", true, i % 4, RANKS[i % 4] } end
+for i = 1, 30 do bigRoster[60 + i] = { ("Asleep Number%02d"):format(i), 20 + i, "MAGE", false, i % 4, RANKS[i % 4], nil, i % 25 } end
 local Cc = Client("Cato Cobalt", "Nerdelandslaget II", { class = "MAGE", roster = bigRoster, profs = { [171] = { 300, 300 } } })
 local D = Client("Dina Dust", "Some Other Guild", {})
 
@@ -380,7 +389,7 @@ local nl2 = A.ns.Members.Get("Nerdelandslaget II")
 ok(nl2 and nl2.online == 60 and #nl2.list == 60, "a 60-member online list crosses in parts (got " .. tostring(nl2 and #nl2.list) .. ")")
 ok(nl2 and nl2.list[1].class == "MAGE", "classes travel as ids")
 local nl = Cc.ns.Members.Get("Nerdelandslaget")
-ok(nl and nl.online == 2 and nl.members == 3, "NL's online count and size reach NL II")
+ok(nl and nl.online == 2 and nl.members == 4, "NL's online count and size reach NL II")
 ok(B.ns.Members.Get("Nerdelandslaget II") ~= nil, "every client of the other guild gets the list")
 local own = A.ns.Members.Get("Nerdelandslaget")
 ok(own and own.own and own.online == 2, "our own guild comes from the roster")
@@ -407,6 +416,57 @@ ok(nz and nz.list[1].name == "Old Timer" and nz.list[1].rankIndex == nil, "a rel
 B.Fire("CHAT_MSG_ADDON", "NLRIKET1", "N;Nerdz;|TInterface\\Icons\\Huge:900|t/Officer", "CHANNEL", "Old Relay-X")
 ok(not B.ns.Members.RankName("Nerdz", 0):find("|", 1, true) and B.ns.Members.RankName("Nerdz", 1) == "Officer", "rank names can't carry escape codes")
 for _, t in ipairs(A.sent) do ok(#t <= 250, "rank messages stay under 250 bytes") end
+
+-- Who is offline: our own guild from the roster, the other guilds from their relay (F).
+local function OffNames(c) local t = {} for _, m in ipairs(c.ns.Members.Offline()) do t[m.name] = m end return t end
+local aOff = OffNames(A)
+ok(aOff["Offline Olaf"] and aOff["Offline Olaf"].guild == "Nerdelandslaget" and not aOff["Gone Gunnar"], "our own guild's offline members come from the roster, not those away over 30 days")
+local sleepy = 0
+for name in pairs(aOff) do if name:find("^Asleep") then sleepy = sleepy + 1 end end
+ok(sleepy == 30, "the other guild's offline members cross in parts (got " .. sleepy .. ")")
+local s7 = aOff["Asleep Number07"]
+ok(s7 and s7.level == 27 and s7.class == "MAGE" and s7.rankIndex == 3 and s7.rank == "Member" and math.abs((now - s7.seen) - 7 * 86400) < 600,
+	"with level, class, rank and when they were last online")
+ok(OffNames(B)["Asleep Number07"] ~= nil, "every client of the other guild gets them")
+local cOff = OffNames(Cc)
+ok(cOff["Offline Olaf"] and not cOff["Gone Gunnar"] and not cOff["Aria Ashfall"] and not cOff["Member Number01"] and not cOff["Cato Cobalt"],
+	"both ways, and nobody online counts as offline")
+local fN, fOK = 0, true
+for _, t in ipairs(Cc.sent) do
+	if t:find("^F;") then fN = fN + 1 if #t > 250 then fOK = false end end
+end
+ok(fN >= 4 and fN <= 8 and fOK, "who is offline goes in a few messages under 250 bytes, not every minute (" .. fN .. ")")
+ok(A.R.db.roster["Asleep Number07"] and A.R.db.roster["Asleep Number07"].g == "Nerdelandslaget II", "kept in the saved data, for the next login")
+ok(not has(A.sent, "Gone Gunnar"), "someone away over 30 days isn't sent")
+A.R.db.roster["Ancient One"] = { g = "Nerdelandslaget II", l = 10, c = "MAGE", s = now - 31 * 86400 }
+ok(not OffNames(A)["Ancient One"], "someone away over 30 days isn't shown")
+A.ns.Members.Prune()
+ok(A.R.db.roster["Ancient One"] == nil, "and is forgotten")
+
+-- The guild chat goes first: a line sent with a round of who is offline still waiting goes out
+-- before it. And someone who left the guild is gone after the next round.
+Advance(200)
+table.remove(bigRoster, 90)   -- Asleep Number30 leaves
+Cc.ns.Members.SendOffline()
+local mark = #Cc.sent
+Cc.env.C_ChatInfo.SendChatMessage("first things first", "GUILD")
+Advance(15)
+local iC, iF
+for i = mark + 1, #Cc.sent do
+	if Cc.sent[i]:find("^C;.*first things first") then iC = i end
+	if Cc.sent[i]:find("^F;") then iF = iF or i end
+end
+ok(iC and iF and iC < iF, "a guild chat line goes before a round of who is offline")
+ok(A.R.db.roster["Asleep Number30"] == nil and A.R.db.roster["Asleep Number29"] ~= nil, "someone who left the other guild is dropped at its next round")
+Advance(30)
+for i = 1, 10 do Cc.R.Send("Z;can wait " .. i, nil, true) end   -- a long round, from a kind nobody reads
+Advance(0.3)
+Cc.env.C_ChatInfo.SendChatMessage("no waiting", "GUILD")
+local said = now
+Advance(15)
+local at
+for i, t in ipairs(Cc.sent) do if t:find("^C;.*no waiting") then at = Cc.sentAt[i] end end
+ok(at and at - said <= 0.31, "a long round of who is offline keeps a message back, so a guild chat line goes at once (after " .. tostring(at and at - said) .. "s)")
 
 -- Professions.
 local cr = Cc.R.db.crafters["Aria Ashfall"]
@@ -454,7 +514,7 @@ ok(tP.points[1][2] == tM and tD.points[1][2] == tP, "one under the other")
 ok(tM.checked and not tP.checked and host.ChatTab.checked == false, "Members marked, the window's own tab not")
 ok(not Cc.env.NLRiketFrameTab1, "no window of its own any more")
 ok(panel.credit.text:find("Made by Neophyte", 1, true) and panel.credit.text:find("v" .. tocVersion, 1, true), "the credit with the version: " .. tostring(panel.credit.text))
-ok(panel.status.text and panel.status.text:find("Nerdelandslaget II", 1, true) and panel.status.text:find("60 of 60 online", 1, true), "the status strip shows who is online: " .. tostring(panel.status.text))
+ok(panel.status.text and panel.status.text:find("Nerdelandslaget II", 1, true) and panel.status.text:find("60 of 89 online", 1, true), "the status strip shows who is online: " .. tostring(panel.status.text))
 
 -- Members.
 local mp = Cc.ns.UI.pages[1]
@@ -487,6 +547,27 @@ local last = mp.list.box.rows[62]
 last.scripts.OnClick(last, "RightButton")
 local menu = Cc.menus[#Cc.menus]
 ok(menu.items[1].title == "Bjorn Ironside" and menu.items[2].text == "Whisper" and menu.items[3].text == "Invite to group", "right-click opens whisper and invite")
+
+-- Offline members, on request.
+mp.offline.checked = true
+mp.offline.scripts.OnClick(mp.offline)
+ok(Cc.R.db.memberOffline and #mp.list.items == 62 + 29 + 1, "\"Show offline players\" adds who is offline: 29 of ours, 1 of theirs (got " .. #mp.list.items .. ")")
+local items = mp.list.items
+ok(not items[60].offline and items[61].offline and items[61].name == "Asleep Number01" and items[89].offline and items[90].name == "Aria Ashfall"
+	and items[92].name == "Offline Olaf", "online first in each guild, then who is offline")
+local olaf
+for _, r in ipairs(mp.list.box.rows) do if r.item and r.item.name == "Offline Olaf" then olaf = r end end
+ok(olaf and olaf.alpha == 0.55 and olaf.zone.text == "Offline 2 days" and olaf.level.text == 40 and olaf.rank.text == "Member",
+	"greyed, with how long since: " .. tostring(olaf and olaf.zone.text))
+local menus = #Cc.menus
+olaf.scripts.OnClick(olaf, "LeftButton")
+olaf.scripts.OnClick(olaf, "RightButton")
+ok(has(Cc.prints, "Offline Olaf is offline (last online 2 days ago).") and #Cc.menus == menus, "clicking someone offline says so instead of whispering")
+olaf.scripts.OnEnter(olaf)
+ok(has(Cc.env.GameTooltip.tlines, "Offline, last online 2 days ago"), "and the tooltip says it")
+mp.offline.checked = false
+mp.offline.scripts.OnClick(mp.offline)
+ok(not Cc.R.db.memberOffline and #mp.list.items == 62, "unticking hides them again")
 
 -- Professions.
 tP.scripts.OnClick(tP)
@@ -697,6 +778,18 @@ ok(has(K.prints, "hides guild chat text from addons"), "and Riket says so once")
 ok(K.env.NLRiketFrame.strata == "HIGH", "Riket's panel lies a layer above the guild window, so its chat box doesn't show through")
 ok(K.ns.UI.CO.ourBar and K.ns.UI.CO.ourBar.template == "MinimalScrollBar" and K.ns.UI.CO.ourBar.points[1][1] == "TOP", "the merged chat's scroll bar is the thin one, centred in the window's bar's place")
 
+-- A game that doesn't say when someone was last online: they show as just "Offline".
+local L = Client("Lise Lang", "Nerdelandslaget", { roster = { { "Lise Lang", 60, "WARRIOR", true }, { "Quiet Quinn", 30, "MAGE", false } } })
+L.env.GetGuildRosterLastOnline = nil
+Advance(15)
+L.R.db.memberOffline = true
+L.ns.UI.Open(1)
+local qrow
+for _, r in ipairs(L.ns.UI.pages[1].list.box.rows) do if r.item and r.item.name == "Quiet Quinn" then qrow = r end end
+ok(qrow and qrow.item.unknown and qrow.zone.text == "Offline", "without the game's last-online time, someone offline shows as just \"Offline\"")
+qrow.scripts.OnClick(qrow, "LeftButton")
+ok(has(L.prints, "Quiet Quinn is offline.") and not has(L.prints, "Quiet Quinn is offline (last"), "and clicking says only that")
+
 -- A client without any of the templates still builds, with plain stand-ins.
 local F = Client("Frida Fjell", "Nerdelandslaget II", { noTemplates = true, class = "MAGE" })
 Advance(30)
@@ -704,6 +797,12 @@ local okF, errF = pcall(function() F.ns.UI.Open(1) F.ns.UI.Open(2) F.ns.UI.Open(
 ok(okF and F.env.NLRiketFrame and F.env.NLRiketFrame.shown, "without the templates it still builds: " .. tostring(errF))
 ok(F.env.NLRiketTabMembers.template == nil and F.ns.UI.pages[1].list.plain and F.ns.UI.pages[2].filter.standIn, "plain tabs, list and filter button")
 ok(not has(F.prints, "in the guild window:"), "and no errors: " .. tostring(F.prints[find(F.prints, "in the guild window:") or 0]))
+
+-- Someone seen in a list from a relay before 1.4.3 (no F) is still kept, and shows as offline
+-- once that list is old.
+Advance(30)   -- (his hello has run out too)
+local bo = OffNames(B)["Old Timer"]
+ok(bo and bo.guild == "Nerdz" and bo.level == 44, "seen online once, offline later")
 
 -- Without the channel: falls back to GUILD (own guild only), no errors.
 local E = Client("Eirik Edge", "Nerdelandslaget", { noChannel = true })

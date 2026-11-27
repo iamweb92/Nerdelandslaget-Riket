@@ -4,6 +4,10 @@
 -- five and a half minutes is shown as unknown.
 -- Guild ranks (1.2) travel beside the list, so a client from before then still reads it: G is
 -- one digit per member in the list's order (the rank's index, 0 = guild master), N the names.
+-- Who is offline (1.4.3): every guild's members are kept between sessions (R.db.roster), with
+-- when each was last online. Our own guild's come from the roster; each other guild's relay
+-- sends its members offline within the last 30 days (F) when the channel has room, and anyone
+-- seen in an online list is kept too, so a relay from before 1.4.3 still fills it in part.
 
 local ADDON_NAME, ns = ...
 local R = ns.R
@@ -15,11 +19,16 @@ ns.Members = M
 M.SEND_EVERY = 120
 M.KEEP = 330
 M.PARTS_MAX = 20
+M.OFFLINE_DAYS = 30       -- members offline longer are neither sent nor shown
+M.OFFLINE_EVERY = 900     -- a relay sends who is offline this often
+M.OFFLINE_GAP = 180       -- and not again sooner, however many come online
+M.OFFLINE_PARTS_MAX = 40  -- about 280 members, the most recent
 
 M.guilds = {}        -- [guild] = { list = { { name, level, class, zone, rank, rankIndex } }, online, members, t, own, ranks, stamp, from }
 local assembling = {} -- [guild] = { stamp, from, parts, got, n }
 local rankNames = {}  -- [guild] = { [index] = name }, from N
 local rankDigits = {} -- [guild] = { stamp, from, digits }, from G, until the list it belongs to is in
+local offAssembling = {} -- [guild] = { stamp, from, parts, got, n }, for F
 
 -- A rank name safe to send and to show: no separators, no escape codes, at most 20 bytes.
 local function CleanRank(s)
@@ -32,27 +41,114 @@ end
 function M.RankName(guild, index)
 	if type(index) ~= "number" then return nil end
 	local e = M.guilds[guild]
-	local names = (e and e.ranks) or rankNames[guild]
+	local names = (e and e.ranks) or rankNames[guild] or (R.db and R.db.ranks[guild])
 	return names and names[index]
 end
 
--- Our own guild's online members, from the game's roster.
+---------------------------------------------------------------------------
+-- Everyone in the guilds, online or not, kept between sessions
+---------------------------------------------------------------------------
+
+local DAY = 86400
+
+-- Notes a member of guild g, last online at `seen` (or offline since we don't know when, if the
+-- game didn't say: m.days == false).
+local function Keep(m, g, seen)
+	if not (R.db and m.name) then return end
+	local k = R.db.roster[m.name]
+	if not k then k = {} R.db.roster[m.name] = k end
+	if k.g ~= g then k.s = nil end
+	k.g, k.l, k.c = g, m.level or k.l, m.class or k.c
+	if m.rankIndex then k.r = m.rankIndex end
+	if not k.s or seen > k.s then k.s = seen end
+	k.u = (m.days == false) or nil
+end
+
+-- A guild's members as one of its lists says: everyone online and offline. Members of g in
+-- neither have left it, or were away too long.
+local function Replace(g, online, offline)
+	local t, listed = time(), {}
+	for _, m in ipairs(online) do listed[m.name] = true Keep(m, g, t) end
+	for _, m in ipairs(offline) do listed[m.name] = true Keep(m, g, t - (m.days or 0) * DAY) end   -- (days false: unknown)
+	for name, k in pairs(R.db.roster) do
+		if k.g == g and not listed[name] then R.db.roster[name] = nil end
+	end
+end
+
+-- Forgets members not online for longer than OFFLINE_DAYS.
+function M.Prune()
+	if not R.db then return end
+	local limit = time() - M.OFFLINE_DAYS * DAY
+	for name, k in pairs(R.db.roster) do
+		if type(k) ~= "table" or not k.s or k.s < limit then R.db.roster[name] = nil end
+	end
+end
+
+-- Members of the guilds who are offline, last online within OFFLINE_DAYS: { name, guild, level,
+-- class, rankIndex, rank, seen }.
+function M.Offline()
+	if not R.db then return {} end
+	local online, t = {}, time()
+	for g, e in pairs(M.guilds) do
+		if M.Get(g) then for _, m in ipairs(e.list) do online[m.name] = true end end
+	end
+	for name, p in pairs(R.peers) do
+		if t - p.t <= R.PEER_FOR then online[name] = true end
+	end
+	online[R.Me() or ""] = true
+	local out, limit = {}, t - M.OFFLINE_DAYS * DAY
+	for name, k in pairs(R.db.roster) do
+		if not online[name] and type(k) == "table" and k.g and k.s and k.s >= limit then
+			out[#out + 1] = { name = name, guild = k.g, level = k.l, class = k.c, rankIndex = k.r,
+				rank = M.RankName(k.g, k.r), seen = math.min(k.s, t), unknown = k.u }
+		end
+	end
+	return out
+end
+
+-- Days since a roster member was last online, or nil if the game doesn't say.
+local function DaysOffline(i)
+	if not GetGuildRosterLastOnline then return nil end
+	local ok, y, mo, d, h = pcall(GetGuildRosterLastOnline, i)
+	if not ok then return nil end
+	y, mo, d, h = Plain(y), Plain(mo), Plain(d), Plain(h)
+	if type(y) ~= "number" and type(mo) ~= "number" and type(d) ~= "number" and type(h) ~= "number" then return nil end
+	return (tonumber(y) or 0) * 365 + (tonumber(mo) or 0) * 30 + (tonumber(d) or 0) + (tonumber(h) or 0) / 24
+end
+
+-- Our own guild's members, from the game's roster: list = online, offline = the rest last
+-- online within OFFLINE_DAYS, most recent first.
 function M.ReadOwn()
 	local g = R.MyGuild()
 	if not g then return nil end
 	local total = Plain((GetNumGuildMembers())) or 0
-	local list, ranks = {}, {}
+	local list, offline, ranks = {}, {}, {}
 	for i = 1, total do
 		local ok, name, rank, rankIndex, level, _, zone, _, _, online, _, class = pcall(GetGuildRosterInfo, i)
 		name = ok and R.Name(Plain(name))
-		if name and Plain(online) then
+		if name then
 			rank, rankIndex = Plain(rank), Plain(rankIndex)
 			if type(rankIndex) ~= "number" then rankIndex = nil end
 			if rankIndex and not ranks[rankIndex] then ranks[rankIndex] = CleanRank(rank) end
-			list[#list + 1] = { name = name, level = Plain(level), class = Plain(class), zone = Plain(zone), rank = rank, rankIndex = rankIndex }
+			local m = { name = name, level = Plain(level), class = Plain(class), rank = rank, rankIndex = rankIndex }
+			if Plain(online) then
+				m.zone = Plain(zone)
+				list[#list + 1] = m
+			else
+				m.days = DaysOffline(i) or false
+				if not m.days or m.days <= M.OFFLINE_DAYS then offline[#offline + 1] = m end
+			end
 		end
 	end
-	M.guilds[g] = { list = list, online = #list, members = total, t = time(), own = true, ranks = ranks }
+	table.sort(offline, function(a, b)
+		if (a.days or 1e9) ~= (b.days or 1e9) then return (a.days or 1e9) < (b.days or 1e9) end
+		return a.name < b.name
+	end)
+	M.guilds[g] = { list = list, offline = offline, online = #list, members = total, t = time(), own = true, ranks = ranks }
+	if R.db and #list > 0 then   -- (a roster still loading lists nobody, not even us)
+		Replace(g, list, offline)
+		if next(ranks) then R.db.ranks[g] = ranks end
+	end
 	if not R.fullName then R.FindMyName() end
 	return M.guilds[g]
 end
@@ -156,6 +252,36 @@ function M.Send()
 	if last > 0 then R.Send(R.Cut("N;" .. g .. ";" .. table.concat(names, "/", 1, last), R.MAX_BYTES), "N") end
 end
 
+-- Who in our guild is offline, for the other guilds. Only the relay sends it, OFFLINE_GAP apart
+-- at the closest, and only when the channel has nothing else to send.
+local offStamp, lastOffline = 0, nil
+function M.SendOffline()
+	if not R.ready or not R.IAmRelay() or not R.OtherGuildOnline() then return end
+	if lastOffline and GetTime() - lastOffline < M.OFFLINE_GAP then return end
+	local own = M.ReadOwn()
+	if not own or #own.list == 0 then return end
+	lastOffline = GetTime()
+	local g = R.MyGuild()
+	offStamp = offStamp % 999 + 1
+	local budget = R.MAX_BYTES - #("F;%s;%d;99;99;"):format(g, offStamp)
+	local parts, cur = {}, {}
+	for _, m in ipairs(own.offline) do
+		local ri = m.rankIndex
+		local e = m.name .. "," .. (m.level or 0) .. "," .. R.ClassID(m.class) .. "," ..
+			((ri and ri >= 0 and ri <= 9) and tostring(ri) or "-") .. "," .. (m.days and math.floor(m.days) or "-")
+		if #cur > 0 and #table.concat(cur, "/") + 1 + #e > budget then
+			parts[#parts + 1] = table.concat(cur, "/")
+			cur = {}
+			if #parts == M.OFFLINE_PARTS_MAX then break end
+		end
+		cur[#cur + 1] = e
+	end
+	if #parts < M.OFFLINE_PARTS_MAX then parts[#parts + 1] = table.concat(cur, "/") end   -- (nobody offline still says so)
+	for i = 1, #parts do
+		R.Send(("F;%s;%d;%d;%d;%s"):format(g, offStamp, i, #parts, parts[i]), "F" .. i, true)
+	end
+end
+
 -- Puts the G digits on the list they belong to (same sender, same round), once both are in.
 local function ApplyRanks(g)
 	local e, d = M.guilds[g], rankDigits[g]
@@ -193,6 +319,7 @@ R.Handle("O", function(rest, who)
 		stamp = st, ranks = rankNames[g] }
 	assembling[g] = nil
 	ApplyRanks(g)
+	for _, m in ipairs(all) do Keep(m, g, time()) end
 	R.Changed("members")
 end)
 
@@ -202,7 +329,42 @@ R.Handle("G", function(rest, who)
 	local g, st = R.CleanGuild(f[1]), tonumber(f[2])
 	if not g or g == R.MyGuild() or not st or not f[3]:match("^[%d%-]*$") then return end
 	rankDigits[g] = { stamp = st, from = who, digits = f[3] }
-	if ApplyRanks(g) then R.Changed("members") end
+	if ApplyRanks(g) then
+		for _, m in ipairs(M.guilds[g].list) do Keep(m, g, time()) end
+		R.Changed("members")
+	end
+end)
+
+R.Handle("F", function(rest, who)
+	local f = R.Split(rest, 5)
+	if not f then return end
+	local g = R.CleanGuild(f[1])
+	local st, part, parts = tonumber(f[2]), tonumber(f[3]), tonumber(f[4])
+	if not g or g == R.MyGuild() or not st or not part or not parts or part < 1 or part > parts or parts > M.OFFLINE_PARTS_MAX then return end
+	local a = offAssembling[g]
+	if not a or a.stamp ~= st or a.from ~= who or a.parts ~= parts then
+		a = { stamp = st, from = who, parts = parts, got = {}, n = 0 }
+		offAssembling[g] = a
+	end
+	if a.got[part] then return end
+	local list = {}
+	for e in f[5]:gmatch("[^/]+") do
+		local name, level, class, rank, days = e:match("^([^,|]+),(%d+),(%d+),([%d%-]),([%d%-]+)$")
+		days = tonumber(days)
+		if name and (not days or days <= M.OFFLINE_DAYS) then
+			list[#list + 1] = { name = name, level = tonumber(level), class = R.ClassFile(class), rankIndex = tonumber(rank), days = days or false }
+		end
+	end
+	a.got[part], a.n = list, a.n + 1
+	if a.n < a.parts then return end
+	local all = {}
+	for i = 1, a.parts do
+		for _, m in ipairs(a.got[i]) do all[#all + 1] = m end
+	end
+	offAssembling[g] = nil
+	local e = M.Get(g)
+	Replace(g, e and e.list or {}, all)
+	R.Changed("members")
 end)
 
 R.Handle("N", function(rest, who)
@@ -217,6 +379,7 @@ R.Handle("N", function(rest, who)
 		i = i + 1
 	end
 	rankNames[g] = names
+	R.db.ranks[g] = names
 	if M.guilds[g] and not M.guilds[g].own then M.guilds[g].ranks = names end
 	R.Changed("members")
 end)
@@ -229,15 +392,18 @@ R.OnChange(function(what, _, guild)
 	C_Timer.After(3 + math.random() * 4, function()
 		soon = false
 		M.Send()
+		M.SendOffline()
 	end)
 end)
 
 R.WhenReady(function()
 	M.Ask()
+	M.Prune()
 	C_Timer.NewTicker(M.SEND_EVERY, function()
 		M.Ask()
 		C_Timer.After(2, M.Send)
 	end)
+	C_Timer.NewTicker(M.OFFLINE_EVERY, function() C_Timer.After(5, M.SendOffline) end)
 end)
 
 -- The roster changes often: read it once a second at most.

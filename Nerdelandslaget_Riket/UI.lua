@@ -413,7 +413,7 @@ UI.J, UI.CO = J, CO
 local PAGE_MEMBERS, PAGE_PROFS, PAGE_DISCORD = 1, 2, 3
 UI.PAGE_MEMBERS, UI.PAGE_PROFS, UI.PAGE_DISCORD = PAGE_MEMBERS, PAGE_PROFS, PAGE_DISCORD
 local PAGES = {
-	{ key = "Members", label = "Members", icon = R.MEDIA .. "round64", tip = "Who is online in every nerd guild." },
+	{ key = "Members", label = "Members", icon = R.MEDIA .. "round64", tip = "Who is online in every nerd guild, and who isn't." },
 	{ key = "Professions", label = "Professions", icon = "Interface\\Icons\\Trade_BlackSmithing", tip = "Everyone's professions, with links to the recipes." },
 	{ key = "Discord", label = "Discord", icon = "Interface\\Icons\\INV_Misc_Note_01", tip = "Your Discord name. Riket needs it." },
 }
@@ -497,14 +497,38 @@ local function SortMembers(items, key, desc)
 			return va < vb
 		end
 		if a.guild ~= b.guild then return a.guild == mine or (b.guild ~= mine and a.guild < b.guild) end
+		if (a.offline or false) ~= (b.offline or false) then return not a.offline end   -- online first
 		return a.name < b.name
 	end)
 end
 UI.SortMembers = SortMembers
 
+-- "3 days", "5 hours": how long since a member was online.
+local function Ago(seen)
+	local s = math.max(0, time() - (seen or time()))
+	if s < 3600 then return "less than an hour" end
+	if s < 86400 then
+		local h = math.floor(s / 3600)
+		return h .. (h == 1 and " hour" or " hours")
+	end
+	local d = math.floor(s / 86400)
+	return d .. (d == 1 and " day" or " days")
+end
+UI.Ago = Ago
+
+local function OfflineFor(m)
+	if m.unknown then return "Offline" end
+	return "Offline, last online " .. Ago(m.seen) .. " ago"
+end
+
+local function SayOffline(m)
+	R.Print(m.unknown and (m.name .. " is offline.") or (m.name .. " is offline (last online " .. Ago(m.seen) .. " ago)."))
+end
+
 local function MemberMenu(row)
 	local m = row.item
 	if not m then return end
+	if m.offline then SayOffline(m) return end
 	Menu(row, function(root)
 		root:CreateTitle(m.name)
 		root:CreateButton("Whisper", function() R.Whisper(m.name) end)
@@ -531,7 +555,8 @@ local function BuildMembers(page, width)
 		row.zone:SetTextColor(0.82, 0.82, 0.82)
 		row:SetScript("OnClick", function(self, button)
 			if not self.item then return end
-			if button == "RightButton" then MemberMenu(self) else R.Whisper(self.item.name) end
+			if self.item.offline then SayOffline(self.item)
+			elseif button == "RightButton" then MemberMenu(self) else R.Whisper(self.item.name) end
 		end)
 		row:SetScript("OnEnter", function(self)
 			local m = self.item
@@ -539,28 +564,40 @@ local function BuildMembers(page, width)
 			local lines = { m.guild }
 			if m.rank then lines[#lines + 1] = "Rank: " .. m.rank end
 			if m.discord then lines[#lines + 1] = "Discord: " .. m.discord end
+			if m.offline then
+				lines[#lines + 1] = OfflineFor(m)
+				Tip(self, m.name, lines)
+				return
+			end
 			if m.zone and m.zone ~= "" then lines[#lines + 1] = m.zone end
 			Tip(self, m.name, lines, { "Click to whisper", "Right-click for more" })
 		end)
 		row:SetScript("OnLeave", HideTip)
 	end, function(row, m)
+		row:SetAlpha(m.offline and 0.55 or 1)
 		row.name:SetText(R.ClassName(m.name, m.class))
 		row.level:SetText(m.level and m.level > 0 and m.level or "")
 		row.guild:SetText(GuildTag(m.guild))
 		row.rank:SetText(m.rank or "")
 		row.discord:SetText(m.discord or "")
-		row.zone:SetText(m.zone or "")
+		row.zone:SetText(m.offline and (m.unknown and "Offline" or ("Offline " .. Ago(m.seen))) or m.zone or "")
 	end, "Nobody online yet. Members of the other guilds show once one of them with Riket is online.")
 	list:SetPoint("TOPLEFT", 0, -26)
 	list:SetPoint("BOTTOMRIGHT")
 	page.list = list
 
+	local offline = Check(page, "Show offline players", R.db.memberOffline, function(on)
+		R.db.memberOffline = on
+		page:Refresh()
+	end, "Members who were online in the last 30 days, greyed out, with how long since.")
+	offline:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 10, 2)
+	page.offline = offline
 	local hint = Text(page, "GameFontDisableSmall")
-	hint:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 16, 9)
-	hint:SetText("Click a column to sort   ·   Click a name to whisper   ·   Right-click for more")
+	hint:SetPoint("LEFT", offline.label, "RIGHT", 16, 0)
+	hint:SetText("Click a column to sort   ·   Right-click a name for more")
 
 	function page:Refresh()
-		local items = {}
+		local items, hidden = {}, 0
 		for _, g in ipairs(R.Guilds()) do
 			local e = M.Get(g)
 			if e then
@@ -570,6 +607,16 @@ local function BuildMembers(page, width)
 				end
 			end
 		end
+		for _, m in ipairs(M.Offline()) do
+			if R.db.memberOffline then
+				m.offline, m.discord = true, R.DiscordOf(m.name)
+				items[#items + 1] = m
+			else
+				hidden = hidden + 1
+			end
+		end
+		list.empty:SetText(hidden > 0 and "Nobody online right now. Tick \"Show offline players\" to see everyone."
+			or "Nobody online yet. Members of the other guilds show once one of them with Riket is online.")
 		local s = R.db.memberSort
 		SortMembers(items, s.key, s.desc)
 		MarkSort(self.headers, s.key, s.desc)

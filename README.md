@@ -5,7 +5,7 @@ En WoW: Forever-addon for alle guilder med «nerd» i navnet: Nerdelandslaget, N
 Alt ligger i guildvinduet (J):
 
 - **Felles guild chat:** guild chatten i J-vinduet viser alle nerd-guildenes /g sammen, sortert etter tid. Lenker kan fortsatt klikkes.
-- **Members:** egen fane med hvem som er pålogget i alle guildene, med level, guild, rank og Discord-navn. Klikk på en kolonne for å sortere.
+- **Members:** egen fane med hvem som er pålogget i alle guildene, med level, guild, rank og Discord-navn. Klikk på en kolonne for å sortere. «Show offline players» viser også dem som er offline.
 - **Professions:** egen fane med alle sine yrker, skill og lenke til oppskriftene.
 - **Discord:** egen fane der hver spiller skriver inn Discord-navnet sitt. Det er obligatorisk.
 
