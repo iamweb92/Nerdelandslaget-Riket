@@ -618,13 +618,20 @@ local function BuildProfessions(page, width)
 		row.link.text:SetPoint("RIGHT")
 		row.link:SetScript("OnClick", function(self, button)
 			local item = row.item
-			if item and item.link then OpenLink(item.link, button) end
+			if not (item and item.link) then return end
+			if IsModifiedClick and IsModifiedClick("CHATLINK") then OpenLink(item.link, button) return end   -- into chat
+			if not item.online then
+				R.Print(item.name .. " is offline. The game only opens a profession link while its player is online.")
+				return
+			end
+			UI.OpenRecipes(item, button)
 		end)
 		row.link:SetScript("OnEnter", function(self)
 			local item = row.item
 			if item and item.link then
-				Tip(self, item.profession, { item.name .. ", " .. (item.max and item.max > 0 and (item.rank .. "/" .. item.max) or tostring(item.rank)) },
-					{ "Click to see the recipes", "Shift-click to put the link in chat" })
+				local lines = { item.name .. ", " .. (item.max and item.max > 0 and (item.rank .. "/" .. item.max) or tostring(item.rank)) }
+				if not item.online then lines[#lines + 1] = item.name .. " is offline: the recipes open only while they are online." end
+				Tip(self, item.profession, lines, { "Click to see the recipes", "Shift-click to put the link in chat" })
 			elseif item then
 				Tip(self, "No link yet", { item.me and "Open this profession's window once, and Riket shares its link."
 					or (item.name .. " hasn't opened this profession with Riket yet.") })
@@ -652,8 +659,9 @@ local function BuildProfessions(page, width)
 		end)
 		row:SetScript("OnLeave", HideTip)
 	end, function(row, item)
+		row:SetAlpha(item.online and 1 or 0.55)
 		row.prof:SetText(item.profession)
-		row.name:SetText(R.ClassName(item.name, item.class) .. (item.me and (" " .. GREY .. "(you)|r") or ""))
+		row.name:SetText(R.ClassName(item.name, item.class) .. (item.me and (" " .. GREY .. "(you)|r") or (not item.online and (" " .. GREY .. "(offline)|r") or "")))
 		row.guild:SetText(GuildTag(item.guild))
 		row.skill:SetText(item.max and item.max > 0 and (item.rank .. "/" .. item.max) or tostring(item.rank))
 		row.link.text:SetText(item.link or (GREY .. "-|r"))
@@ -668,21 +676,51 @@ local function BuildProfessions(page, width)
 		P.Ask()
 		P.SendMine(true)
 	end)
-	ask:SetScript("OnEnter", function(self) Tip(self, "Ask everyone again", { "Everyone online with Riket sends their professions." }) end)
+	ask:SetScript("OnEnter", function(self)
+		Tip(self, "Ask everyone again", { "Everyone online with Riket sends their professions.",
+			"Open each of your profession windows once, and Riket shares its link." })
+	end)
 	ask:SetScript("OnLeave", HideTip)
 	page.ask = ask
-	local hint = Text(page, "GameFontDisableSmall")
-	hint:SetPoint("LEFT", ask, "RIGHT", 10, 0)
-	hint:SetPoint("RIGHT", frame, "RIGHT", -180, 0)
-	hint:SetText("Open each of your profession windows once, and Riket shares its link.")
+	local offline = Check(page, "Show offline players", R.db.profOffline, function(on)
+		R.db.profOffline = on
+		page:FillList()
+	end, "Players who are offline, greyed out. Their profession links open only while they are online.")
+	offline:SetPoint("LEFT", ask, "RIGHT", 12, 0)
+	page.offline = offline
 
-	function page:FillList() list:SetItems(P.Rows(R.db.profFilter or 0)) end
+	-- online players only, unless asked; everyone's own professions always
+	function page:FillList()
+		local items, hidden = {}, 0
+		for _, item in ipairs(P.Rows(R.db.profFilter or 0)) do
+			item.online = item.me or M.IsOnline(item.name)
+			if item.online or R.db.profOffline then items[#items + 1] = item else hidden = hidden + 1 end
+		end
+		list.empty:SetText(hidden > 0 and "Nobody with these professions is online right now. Tick \"Show offline players\" to see everyone."
+			or "No professions yet. They show as members with Riket come online.")
+		list:SetItems(items)
+	end
 	function page:Refresh()
 		filter:RiketUpdate(FilterLabel())
 		self:FillList()
 	end
 end
 
+
+-- Opens another player's recipes from their link, and says so when the game doesn't (it only
+-- opens a profession link while its player is online, and Forever may not open them at all).
+local pendingRecipes
+function UI.OpenRecipes(item, button)
+	local mine = { name = item.name, profession = item.profession }
+	pendingRecipes = mine
+	OpenLink(item.link, button)
+	C_Timer.After(4, function()
+		if pendingRecipes ~= mine then return end
+		pendingRecipes = nil
+		R.Print(("couldn't open %s's %s recipes. Whisper them, or shift-click the link to put it in chat."):format(item.name, item.profession))
+	end)
+end
+R.On("TRADE_SKILL_SHOW", function() pendingRecipes = nil end)
 
 ---------------------------------------------------------------------------
 -- Page 3: Discord. Everyone sets their Discord name here; Riket stays off until then. Where

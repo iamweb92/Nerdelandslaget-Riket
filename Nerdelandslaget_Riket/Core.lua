@@ -40,6 +40,7 @@ local DEFAULTS = {
 	window = {},
 	tab = 1,
 	profFilter = 0,       -- 0 = every profession
+	profOffline = false,  -- the professions list shows players who are offline too
 	memberSort = { key = "guild", desc = false },   -- the Members list's sort: name, level, guild, rank or zone
 	mapButton = true,
 	mapAngle = 200,

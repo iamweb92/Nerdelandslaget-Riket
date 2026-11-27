@@ -88,6 +88,23 @@ function M.WriteNote(text)
 	return false
 end
 
+-- Is this player online? Everyone who shares professions runs Riket, and Riket says hello every
+-- minute; the guilds' online lists cover the rest.
+function M.IsOnline(name)
+	if not name then return false end
+	if name == R.Me() then return true end
+	local p = R.peers[name]
+	if p and time() - p.t <= R.PEER_FOR then return true end
+	for g, e in pairs(M.guilds) do
+		if M.Get(g) then
+			for _, m in ipairs(e.list or {}) do
+				if m.name == name then return true end
+			end
+		end
+	end
+	return false
+end
+
 -- A guild's entry if it is fresh enough to show, else nil.
 function M.Get(guild)
 	local e = M.guilds[guild]

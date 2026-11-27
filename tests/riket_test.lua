@@ -279,7 +279,9 @@ local function Client(name, guild, opts)
 		GetTradeSkillListLink = function() return "|cffffd000|Htrade:Player-1234-ABCD:2018:164|h[Blacksmithing]|h|r" end,
 	}
 	env.MenuUtil = { CreateContextMenu = function(owner, gen) local root = Root() gen(owner, root) c.menus[#c.menus + 1] = root end }
-	env.SetItemRef = function(ref, link) c.opened = ref end
+	env.SetItemRef = function(ref, link) c.opened = ref if c.recipesOpen then c.Fire("TRADE_SKILL_SHOW") end end
+	env.IsModifiedClick = function(kind) return kind == "CHATLINK" and c.shift == true end
+	env.ChatEdit_InsertLink = function(link) c.inserted = link return true end
 	function c.Fire(event, ...)
 		for _, f in ipairs(c.frames) do
 			if f.events[event] and f.scripts.OnEvent then f.scripts.OnEvent(f, event, ...) end
@@ -502,6 +504,43 @@ for _, r in ipairs(pp.list.box.rows) do if r.item and r.item.id == 164 then bs =
 bs.link.scripts.OnClick(bs.link, "LeftButton")
 ok(Cc.opened and Cc.opened:find("^trade:"), "clicking a profession link opens the recipes")
 
+-- Offline players are hidden, and a link that doesn't open says so.
+Cc.R.db.crafters["Emo Lock"] = { guild = "Nerdelandslaget", class = "WARLOCK", level = 40, t = now - 3600,
+	profs = { [197] = { rank = 100, max = 150 } }, links = { [197] = "|cffffd000|Htrade:Player-1-EMO:3908:197|h[Tailoring]|h|r" } }
+pp:Refresh()
+local names2 = {}
+for _, it in ipairs(pp.list.items) do names2[#names2 + 1] = it.name end
+ok(not has(names2, "Emo Lock") and #pp.list.items == 3, "an offline player's professions are hidden")
+pp.offline.checked = true
+pp.offline.scripts.OnClick(pp.offline)
+local emo
+for _, r in ipairs(pp.list.box.rows) do if r.item and r.item.name == "Emo Lock" then emo = r end end
+ok(Cc.R.db.profOffline and emo and emo.item.online == false and emo.alpha == 0.55 and emo.name.text:find("(offline)", 1, true), "\"Show offline players\" shows them, greyed")
+Cc.opened = nil
+emo.link.scripts.OnClick(emo.link, "LeftButton")
+ok(Cc.opened == nil and has(Cc.prints, "Emo Lock is offline"), "clicking an offline player's link says why it won't open")
+Cc.shift = true
+emo.link.scripts.OnClick(emo.link, "LeftButton")
+Cc.shift = false
+ok(Cc.inserted and Cc.inserted:find("Tailoring", 1, true), "shift-click still puts the link in chat")
+pp.offline.checked = false
+pp.offline.scripts.OnClick(pp.offline)
+ok(not Cc.R.db.profOffline and #pp.list.items == 3, "and unticking hides them again")
+for _, r in ipairs(pp.list.box.rows) do if r.item and r.item.id == 164 then bs = r end end
+local before2 = #Cc.prints
+bs.link.scripts.OnClick(bs.link, "LeftButton")
+Advance(5)
+ok(Cc.opened and has(Cc.prints, "couldn't open Aria Ashfall's Blacksmithing recipes"), "an online player's link that the game doesn't open is reported, with what to do instead")
+Cc.recipesOpen = true
+local count = 0
+for _, l in ipairs(Cc.prints) do if l:find("couldn't open Aria", 1, true) then count = count + 1 end end
+bs.link.scripts.OnClick(bs.link, "LeftButton")
+Advance(5)
+local count2 = 0
+for _, l in ipairs(Cc.prints) do if l:find("couldn't open Aria", 1, true) then count2 = count2 + 1 end end
+ok(count2 == count, "when the recipes do open, nothing is said")
+Cc.recipesOpen = false
+
 -- Discord, for a player whose rank can't edit notes.
 tD.scripts.OnClick(tD)
 local dpc = Cc.ns.UI.pages[3]
@@ -569,7 +608,7 @@ ok(host.shown and panel.shown, "the minimap button opens Riket in the guild wind
 ok(type(Cc.env.NLRiket_OnAddonCompartmentClick) == "function" and type(Cc.env.NLRiket_OnAddonCompartmentEnter) == "function", "the addon list entry has its functions")
 
 -- /riket check, and errors said out loud.
-ok(not has(Cc.prints, "couldn't"), "no errors in the guild window: " .. tostring(Cc.prints[find(Cc.prints, "couldn't") or 0]))
+ok(not has(Cc.prints, "in the guild window:"), "no errors in the guild window: " .. tostring(Cc.prints[find(Cc.prints, "in the guild window:") or 0]))
 Cc.env.SlashCmdList.NLRIKET("check")
 ok(has(Cc.prints, "its tabs: ChatTab, RosterTab, GuildBenefitsTab, GuildInfoTab") and has(Cc.prints, "Riket's tabs under GuildBenefitsTab, shown true"), "/riket check tells what it sees")
 local r = Cc.ns.UI.Safe("test something", function() error("boom") end)
@@ -618,7 +657,7 @@ dp.show.scripts.OnClick(dp.show)
 ok(N.R.db.toChatFrame == false, "the chat window setting lives in the Discord tab")
 N.env.NLRiketTabMembers.scripts.OnClick(N.env.NLRiketTabMembers)
 ok(N.R.db.tab == 1 and N.env.NLRiketTabMembers.checked, "with the name set, the other tabs open")
-ok(not has(N.prints, "couldn't"), "no errors for the newcomer")
+ok(not has(N.prints, "in the guild window:"), "no errors for the newcomer")
 
 ---------------------------------------------------------------------------
 -- Forever's names: the game gives us only "Aria", everyone else sees "Aria Ashfall"
@@ -664,7 +703,7 @@ Advance(30)
 local okF, errF = pcall(function() F.ns.UI.Open(1) F.ns.UI.Open(2) F.ns.UI.Open(3) F.ns.UI.Refresh() end)
 ok(okF and F.env.NLRiketFrame and F.env.NLRiketFrame.shown, "without the templates it still builds: " .. tostring(errF))
 ok(F.env.NLRiketTabMembers.template == nil and F.ns.UI.pages[1].list.plain and F.ns.UI.pages[2].filter.standIn, "plain tabs, list and filter button")
-ok(not has(F.prints, "couldn't"), "and no errors: " .. tostring(F.prints[find(F.prints, "couldn't") or 0]))
+ok(not has(F.prints, "in the guild window:"), "and no errors: " .. tostring(F.prints[find(F.prints, "in the guild window:") or 0]))
 
 -- Without the channel: falls back to GUILD (own guild only), no errors.
 local E = Client("Eirik Edge", "Nerdelandslaget", { noChannel = true })
