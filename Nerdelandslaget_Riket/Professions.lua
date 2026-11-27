@@ -5,6 +5,10 @@
 -- Riket). It sends them (P, then K for each link) when ready, after a change, every 20 minutes
 -- and when someone asks (Q). Every client keeps what it heard for three weeks, so crafters who
 -- are offline still show.
+-- Recipes (1.4.4): Forever doesn't open other players' profession links, so Riket reads the
+-- recipes each player knows when they open their profession window, and sends them (X) after
+-- a change and when someone asks for them (W). Everyone keeps what they hear, so the recipes
+-- of a player who is offline show too, once anyone has heard them.
 
 local ADDON_NAME, ns = ...
 local R = ns.R
@@ -16,6 +20,10 @@ ns.Prof = P
 P.KEEP = 21 * 86400
 P.SEND_EVERY = 20 * 60
 P.ANSWER_GAP = 60
+P.RECIPE_GAP = 20          -- sending one profession's recipes again, at the soonest
+P.RECIPE_ASK_GAP = 30      -- asking a player for the same recipes again, at the soonest
+P.RECIPE_PARTS_MAX = 16
+P.RECIPES_MAX = 3000
 
 -- The professions, by skill line, with English names for when the game names none.
 P.LINES = {
@@ -65,6 +73,205 @@ function P.ValidLink(l)
 end
 
 ---------------------------------------------------------------------------
+-- Recipe lists, as X carries them: sorted ids, the first whole, then each the step from the one
+-- before, all in base 36. 150 recipes fit in about 450 bytes.
+---------------------------------------------------------------------------
+
+local DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz"
+local function B36(n)
+	if n == 0 then return "0" end
+	local s = ""
+	while n > 0 do
+		local d = n % 36
+		s = DIGITS:sub(d + 1, d + 1) .. s
+		n = (n - d) / 36
+	end
+	return s
+end
+
+function P.Encode(ids)
+	local sorted, seen = {}, {}
+	for _, id in ipairs(ids) do
+		id = tonumber(id)
+		if id and id > 0 and id == math.floor(id) and not seen[id] then seen[id] = true sorted[#sorted + 1] = id end
+	end
+	table.sort(sorted)
+	local out, prev = {}, 0
+	for i, id in ipairs(sorted) do
+		out[i] = B36(id - prev)
+		prev = id
+	end
+	return table.concat(out, ","), #sorted
+end
+
+-- The ids, or nil if the text isn't a recipe list.
+function P.Decode(s)
+	if type(s) ~= "string" or s == "" or not s:match("^[0-9a-z,]+$") then return nil end
+	local ids, prev = {}, 0
+	for part in (s .. ","):gmatch("([^,]*),") do
+		local step = tonumber(part, 36)
+		if not step or step == 0 then return nil end
+		prev = prev + step
+		ids[#ids + 1] = prev
+		if #ids > P.RECIPES_MAX then return nil end
+	end
+	return ids
+end
+
+-- A recipe's name, icon and link, from the game's spell data (a recipe's id is its spell's).
+local function Try(fn, ...)
+	if type(fn) ~= "function" then return nil end
+	local ok, v = pcall(fn, ...)
+	if ok and not IsSecret(v) then return v end
+	return nil
+end
+
+function P.RecipeName(id)
+	local n = Try(C_Spell and C_Spell.GetSpellName, id)
+	if type(n) ~= "string" or n == "" then n = Try(GetSpellInfo, id) end
+	if type(n) ~= "string" or n == "" then
+		local info = Try(C_TradeSkillUI and C_TradeSkillUI.GetRecipeInfo, id)
+		n = type(info) == "table" and Plain(info.name) or nil
+	end
+	if type(n) ~= "string" or n == "" then return nil end
+	return n
+end
+
+function P.RecipeIcon(id)
+	local i = Try(C_Spell and C_Spell.GetSpellTexture, id) or Try(GetSpellTexture, id)
+	if i then return i end
+	local info = Try(C_TradeSkillUI and C_TradeSkillUI.GetRecipeInfo, id)
+	return type(info) == "table" and Plain(info.icon) or nil
+end
+
+function P.RecipeLink(id)
+	local l = Try(C_TradeSkillUI and C_TradeSkillUI.GetRecipeLink, id)
+	if type(l) ~= "string" or l == "" then l = Try(C_Spell and C_Spell.GetSpellLink, id) end
+	if type(l) ~= "string" or l == "" then l = Try(GetSpellLink, id) end
+	return type(l) == "string" and l ~= "" and l or nil
+end
+
+-- The recipes the open profession window says we know, sorted.
+local function ReadRecipeIDs()
+	local T = C_TradeSkillUI
+	local out, seen = {}, {}
+	if T and type(T.GetAllRecipeIDs) == "function" and type(T.GetRecipeInfo) == "function" then
+		local ids = Try(T.GetAllRecipeIDs)
+		if type(ids) == "table" then
+			for _, id in ipairs(ids) do
+				id = tonumber(Plain(id))
+				if id and not seen[id] then
+					local info = Try(T.GetRecipeInfo, id)
+					if type(info) == "table" and Plain(info.learned) then seen[id] = true out[#out + 1] = id end
+				end
+			end
+		end
+	end
+	if #out == 0 and type(GetNumTradeSkills) == "function" and type(GetTradeSkillRecipeLink) == "function" then
+		for i = 1, tonumber(Try(GetNumTradeSkills)) or 0 do
+			local ok, _, kind = pcall(GetTradeSkillInfo, i)
+			kind = ok and Plain(kind)
+			if ok and kind ~= "header" and kind ~= "subheader" then
+				local link = Try(GetTradeSkillRecipeLink, i)
+				local id = type(link) == "string" and tonumber(link:match("enchant:(%d+)"))
+				if id and not seen[id] then seen[id] = true out[#out + 1] = id end
+			end
+		end
+	end
+	table.sort(out)
+	return out
+end
+
+function P.KeepRecipes(name, id, s, n)
+	if not (R.db and name and id) then return end
+	R.db.recipes[name] = R.db.recipes[name] or {}
+	R.db.recipes[name][id] = { s = s, n = n, t = time() }
+	R.Changed("recipes", name, id)
+end
+
+-- { s, n, t } for a player's profession, if anyone has heard it.
+function P.RecipesOf(name, id)
+	local r = R.db and R.db.recipes[name]
+	return r and r[id]
+end
+
+local recipeStamp, recipeSent = 0, {}
+-- Sends our recipes in a profession: at once when asked, after other messages after a change.
+function P.SendRecipes(id, canWait)
+	if not R.ready or not R.char then return end
+	id = tonumber(id)
+	if not id or (recipeSent[id] and time() - recipeSent[id] < P.RECIPE_GAP) then return end
+	recipeSent[id] = time()
+	recipeStamp = recipeStamp % 999 + 1
+	local s = R.char.recipes[id]
+	if type(s) ~= "string" or s == "" then
+		R.Send(("X;%d;%d;0;0;"):format(id, recipeStamp), "X" .. id)
+		return
+	end
+	local budget = R.MAX_BYTES - #("X;%d;%d;99;99;"):format(id, recipeStamp)
+	local parts, cur = {}, ""
+	for step in s:gmatch("[^,]+") do
+		if cur ~= "" and #cur + 1 + #step > budget then
+			parts[#parts + 1] = cur
+			cur = ""
+		end
+		cur = cur == "" and step or (cur .. "," .. step)
+	end
+	parts[#parts + 1] = cur
+	if #parts > P.RECIPE_PARTS_MAX then return end
+	for i, part in ipairs(parts) do
+		R.Send(("X;%d;%d;%d;%d;%s"):format(id, recipeStamp, i, #parts, part), "X" .. id .. ":" .. i, canWait)
+	end
+end
+
+local asked = {}
+-- Asks a player for their recipes in a profession. False if just asked.
+function P.AskRecipes(name, id)
+	local key = name .. ":" .. id
+	if asked[key] and time() - asked[key] < P.RECIPE_ASK_GAP then return false end
+	asked[key] = time()
+	R.Send(("W;%s;%d"):format(name, id), "W" .. key)
+	return true
+end
+
+R.Handle("W", function(rest, who)
+	local f = R.Split(rest, 2)
+	if not f or f[1] ~= R.Me() then return end
+	local id = tonumber(f[2])
+	if id then C_Timer.After(0.5 + math.random(), function() P.SendRecipes(id) end) end
+end)
+
+P.notRead = {}   -- ["name:skillLine"] = when the player said they haven't read those recipes yet
+local recAssembling = {}
+R.Handle("X", function(rest, who)
+	local f = R.Split(rest, 5)
+	if not f then return end
+	local id, st, part, parts = tonumber(f[1]), tonumber(f[2]), tonumber(f[3]), tonumber(f[4])
+	if not id or not st or not part or not parts or parts > P.RECIPE_PARTS_MAX then return end
+	local key = who .. ":" .. id
+	if parts == 0 then
+		P.notRead[key] = time()
+		R.Changed("recipes", who, id)
+		return
+	end
+	if part < 1 or part > parts or not f[5]:match("^[0-9a-z,]+$") then return end
+	local a = recAssembling[key]
+	if not a or a.stamp ~= st or a.parts ~= parts then
+		a = { stamp = st, parts = parts, got = {}, n = 0 }
+		recAssembling[key] = a
+	end
+	if a.got[part] then return end
+	a.got[part], a.n = f[5], a.n + 1
+	if a.n < a.parts then return end
+	recAssembling[key] = nil
+	local s = table.concat(a.got, ",", 1, a.parts)
+	local ids = P.Decode(s)
+	if not ids then return end
+	P.notRead[key] = nil
+	P.KeepRecipes(who, id, s, #ids)
+end)
+
+---------------------------------------------------------------------------
 -- Our own professions
 ---------------------------------------------------------------------------
 
@@ -80,7 +287,7 @@ function P.ReadMine()
 			if rank and rank > 0 then
 				mine[id] = { rank = rank, max = max or 0 }
 			elseif rank == 0 then
-				R.char.profs[id], R.char.links[id] = nil, nil   -- unlearned
+				R.char.profs[id], R.char.links[id], R.char.recipes[id] = nil, nil, nil   -- unlearned
 			end
 		end
 	end
@@ -139,6 +346,16 @@ function P.ReadWindow()
 	if changed then
 		P.SendMine(true)
 		R.Changed("profs")
+	end
+	local ids = ReadRecipeIDs()
+	if #ids == 0 then R.Log("no recipes read from the", name, "window") end
+	if #ids > 0 then
+		local s, n = P.Encode(ids)
+		if R.char.recipes[id] ~= s then
+			R.char.recipes[id] = s
+			P.KeepRecipes(R.Me(), id, s, n)
+			P.SendRecipes(id, true)
+		end
 	end
 end
 
@@ -270,6 +487,9 @@ R.On("ADDON_LOADED", function(name)
 	local now = time()
 	for who, c in pairs(R.db.crafters) do
 		if type(c) ~= "table" or now - (c.t or 0) > P.KEEP then R.db.crafters[who] = nil end
+	end
+	for who, r in pairs(R.db.recipes) do   -- recipes go with their crafter
+		if type(r) ~= "table" or not R.db.crafters[who] then R.db.recipes[who] = nil end
 	end
 end)
 

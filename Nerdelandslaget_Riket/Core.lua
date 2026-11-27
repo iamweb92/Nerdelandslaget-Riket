@@ -18,6 +18,10 @@
 --   P;guild;classID;level;professions     my professions: skillLine.rank.max joined by ','
 --   K;skillLine;link                      the link to one of my professions
 --   Q                                     please send me your professions
+--   W;name;skillLine                      name: please send your recipes in that profession
+--   X;skillLine;stamp;part;parts;recipes  my recipes in a profession (parts 0: not read yet);
+--                                         recipes: the first id, then each the step from the one
+--                                         before, in base 36, joined by ','
 --
 -- A guild's relay is its member with Riket whose name sorts first among those heard in the last
 -- 150 seconds. Only the relay repeats its guild's /g and roster, so every line crosses once
@@ -55,12 +59,14 @@ local DEFAULTS = {
 	-- stays off until it is set.
 	discords = {},        -- [character] = Discord name, as each one's Riket says it
 	crafters = {},        -- [name] = { guild, class, level, profs = { [skillLine] = { rank, max } }, links, t }
+	recipes = {},         -- [name] = { [skillLine] = { s = recipes as X sends them, n = how many, t } }
 	chatLog = {},         -- the last lines of every guild's /g, for the window
 	log = {},
 }
 local CHAR_DEFAULTS = {
 	profs = {},           -- [skillLine] = { rank, max, name }: what the profession window said last
 	links = {},           -- [skillLine] = the profession's link, from the profession window
+	recipes = {},         -- [skillLine] = the recipes this character knows, as X sends them
 	noteAsked = false,    -- whether we have offered to put the Discord name in this character's guild note
 }
 
@@ -261,7 +267,7 @@ end
 -- Opens a whisper to name in the chat box.
 function R.Whisper(name)
 	if not name then return end
-	for _, fn in ipairs({ ChatFrameUtil and ChatFrameUtil.SendTell, ChatFrame_SendTell }) do
+	for _, fn in ipairs({ ChatFrameUtil and ChatFrameUtil.SendTell or false, ChatFrame_SendTell or false }) do   -- (false, not nil: ipairs stops at nil)
 		if type(fn) == "function" and pcall(fn, name) then return end
 	end
 end

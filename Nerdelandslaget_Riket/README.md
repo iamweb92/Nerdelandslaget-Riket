@@ -6,7 +6,7 @@ En liten, frittstående addon for alle guilder med «nerd» i navnet, for eksemp
 
 1. **Felles guild chat:** guild chatten i J-vinduet viser de andre nerd-guildenes /g sammen med din egen, sortert etter tid, som `[Nerdelandslaget II] [Navn]: tekst`. Du skriver som før i feltet under. Lenker til items og spells kan fortsatt klikkes.
 2. **Members** (egen fane): hvem som er pålogget i alle guildene, med level, klasse, guild, guild rank og Discord-navn. Klikk på en kolonneoverskrift for å sortere, og klikk igjen for å snu rekkefølgen. Klikk på et navn for å whispre, høyreklikk for å invitere. Kryss av «Show offline players» for å også se dem som har vært pålogget de siste 30 dagene, grået ut og med hvor lenge siden.
-3. **Professions** (egen fane): alle sine yrker med skill og lenke. Klikk på lenken for å se oppskriftene, shift-klikk for å lime den inn i chat.
+3. **Professions** (egen fane): alle sine yrker med skill. Klikk på et yrke for å se oppskriftene personen kan, med søk. Klikk på en oppskrift for å whispre «Can you make [oppskrift]?», shift-klikk for å lime den inn i chat.
 4. **Discord** (egen fane): her skriver du inn Discord-navnet ditt. Det er obligatorisk.
 
 ## Installere
@@ -25,7 +25,7 @@ Har ranken din lov til å endre guild note, kan du med én knapp i Discord-fanen
 - **Lite guildvindu:** i det lille chat-moduset har ikke guildvinduet plass til Riket-fanene. Gjør vinduet stort igjen, så kommer de tilbake.
 - **Officer chat:** officer chatten er som før og blir aldri blandet med de andre guildene.
 - **Andre kommandoer:** `/riket members`, `/riket professions`, `/riket discord`, `/riket check` (viser hva Riket ser i guildvinduet), `/riket status` og `/riket button` (viser eller skjuler minimap-knappen).
-- **Lenker til yrker:** åpne hvert av dine yrkesvinduer én gang. Spillet gir bare ut lenken mens vinduet er åpent.
+- **Oppskrifter:** åpne hvert av dine yrkesvinduer én gang med Riket 1.4.4 eller nyere. Da leser Riket hvilke oppskrifter du kan og deler dem, også med dem som ser lista mens du er offline. WoW: Forever åpner ikke andres yrkeslenker, så Riket viser oppskriftene selv.
 
 ## Greit å vite
 

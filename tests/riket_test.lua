@@ -65,6 +65,9 @@ local function Stub(name)
 end
 
 local clients, byName = {}, {}
+-- recipe names, as the game's spell data has them
+local RECIPE_NAMES = {}
+for k = 0, 49 do RECIPE_NAMES[2660 + k * 7] = ((k % 2 == 0) and "Copper " or "Bronze ") .. ("Thing %02d"):format(k) end
 local GUILD_CLUB, GUILD_STREAM, OFFICER_STREAM, OTHER_CLUB = "club-guild", "stream-guild", "stream-officer", "club-friends"
 
 local function Client(name, guild, opts)
@@ -144,6 +147,13 @@ local function Client(name, guild, opts)
 	env.GameTooltip = Stub()
 	env.GameTooltip.SetText = function(self, t) self.tlines = { t } end
 	env.GameTooltip.AddLine = function(self, t) table.insert(self.tlines, t) end
+	env.GameTooltip.SetSpellByID = function(self, id) self.tlines = { "spell " .. id } end
+	env.C_Spell = {
+		GetSpellName = function(id) return RECIPE_NAMES[id] end,
+		GetSpellTexture = function(id) return 134400 + (id % 7) end,
+		GetSpellLink = function(id) return "|cff71d5ff|Hspell:" .. id .. ":0|h[" .. (RECIPE_NAMES[id] or ("Spell " .. id)) .. "]|h|r" end,
+	}
+	env.ChatFrame_SendTell = function(who) c.tellTo = who end
 	env.SlashCmdList = {}
 	env.tinsert = table.insert
 	env.strtrim = function(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
@@ -282,13 +292,28 @@ local function Client(name, guild, opts)
 			rank = p and p[1] or 0, maxRank = p and p[2] or 0 }
 	end }
 	env.C_TradeSkillUI = {
-		GetBaseProfessionInfo = function() return { professionID = c.openProf, professionName = "Blacksmithing", skillLevel = 250, maxSkillLevel = 300 } end,
+		GetBaseProfessionInfo = function()
+			local p = (opts.profs or {})[c.openProf]
+			return { professionID = c.openProf, professionName = ({ [164] = "Blacksmithing", [171] = "Alchemy", [186] = "Mining" })[c.openProf],
+				skillLevel = p and p[1] or 250, maxSkillLevel = p and p[2] or 300 }
+		end,
+		-- recipes: opts.recipes[skillLine] = { { id, learned } }
+		GetAllRecipeIDs = function()
+			local out = {}
+			for i, r in ipairs((opts.recipes or {})[c.openProf] or {}) do out[i] = r[1] end
+			return out
+		end,
+		GetRecipeInfo = function(id)
+			for _, r in ipairs((opts.recipes or {})[c.openProf] or {}) do
+				if r[1] == id then return { recipeID = id, learned = r[2], name = RECIPE_NAMES[id] } end
+			end
+		end,
 		GetTradeSkillListLink = function() return "|cffffd000|Htrade:Player-1234-ABCD:2018:164|h[Blacksmithing]|h|r" end,
 	}
 	env.MenuUtil = { CreateContextMenu = function(owner, gen) local root = Root() gen(owner, root) c.menus[#c.menus + 1] = root end }
 	env.SetItemRef = function(ref, link) c.opened = ref if c.recipesOpen then c.Fire("TRADE_SKILL_SHOW") end end
 	env.IsModifiedClick = function(kind) return kind == "CHATLINK" and c.shift == true end
-	env.ChatEdit_InsertLink = function(link) c.inserted = link return true end
+	env.ChatEdit_InsertLink = function(link) c.inserted = link c.insertedAll = c.insertedAll or {} table.insert(c.insertedAll, link) return true end
 	function c.Fire(event, ...)
 		for _, f in ipairs(c.frames) do
 			if f.events[event] and f.scripts.OnEvent then f.scripts.OnEvent(f, event, ...) end
@@ -330,13 +355,19 @@ end
 -- nerd guild.
 local A = Client("Aria Ashfall", "Nerdelandslaget", { roster = { { "Aria Ashfall", 60, "WARRIOR", true }, { "Bjorn Ironside", 58, "MAGE", true },
 	{ "Offline Olaf", 40, "MAGE", false, 3, "Member", nil, 2 }, { "Gone Gunnar", 20, "WARRIOR", false, 3, "Member", nil, 90 } },
-	profs = { [164] = { 250, 300 }, [186] = { 280, 300 } } })
+	profs = { [164] = { 250, 300 }, [186] = { 280, 300 } }, recipes = { [164] = (function()
+		local r = {}
+		for k = 0, 49 do r[#r + 1] = { 2660 + k * 7, k < 40 } end
+		return r
+	end)() } })
 local B = Client("Bjorn Ironside", "Nerdelandslaget", { class = "MAGE", roster = { { "Aria Ashfall", 60, "WARRIOR", true }, { "Bjorn Ironside", 58, "MAGE", true } } })
 local bigRoster = {}
 local RANKS = { [0] = "Guild Master", "Officer", "Veteran", "Member" }
 for i = 1, 60 do bigRoster[i] = { ("Member Number%02d"):format(i), 10 + i % 50, "MAGE", true, i % 4, RANKS[i % 4] } end
 for i = 1, 30 do bigRoster[60 + i] = { ("Asleep Number%02d"):format(i), 20 + i, "MAGE", false, i % 4, RANKS[i % 4], nil, i % 25 } end
-local Cc = Client("Cato Cobalt", "Nerdelandslaget II", { class = "MAGE", roster = bigRoster, profs = { [171] = { 300, 300 } } })
+local bigRecipes = {}
+for k = 1, 600 do bigRecipes[k] = { 10000 + k * k, true } end
+local Cc = Client("Cato Cobalt", "Nerdelandslaget II", { class = "MAGE", roster = bigRoster, profs = { [171] = { 300, 300 } }, recipes = { [171] = bigRecipes } })
 local D = Client("Dina Dust", "Some Other Guild", {})
 
 Advance(30)   -- everyone joins, says hello, asks for professions
@@ -486,6 +517,34 @@ ok(Cc.R.db.crafters["Aria Ashfall"].links[164]:find("Htrade", 1, true), "a bad l
 local all = Cc.ns.Prof.Rows(0)
 ok(#all == 3, "the board holds everyone's professions: Aria 2, Cato 1 (got " .. #all .. ")")
 
+-- Recipes: opening a profession window reads the ones we know, and everyone gets them.
+local Pc = Cc.ns.Prof
+local aRec = A.R.char.recipes[164]
+local aIds = A.ns.Prof.Decode(aRec)
+ok(aIds and #aIds == 40, "opening a profession window reads the recipes we know, not the others (got " .. tostring(aIds and #aIds) .. ")")
+local cRec = Pc.RecipesOf("Aria Ashfall", 164)
+ok(cRec and cRec.n == 40 and cRec.s == aRec, "and they reach the other guild")
+local s1, n1 = Pc.Encode({ 30, 10, 20, 10, 999999 })
+ok(n1 == 4 and table.concat(Pc.Decode(s1), ",") == "10,20,30,999999", "recipe lists pack and unpack, sorted and once each: " .. s1)
+ok(Pc.Decode("") == nil and Pc.Decode("a,,b") == nil and Pc.Decode("1,0") == nil and Pc.Decode("|Hx") == nil, "a bad recipe list is refused")
+local xBefore = #Cc.sent
+Cc.openProf = 171
+Cc.Fire("TRADE_SKILL_SHOW")
+Advance(20)
+local xParts = 0
+for i = xBefore + 1, #Cc.sent do
+	local t = Cc.sent[i]
+	if t:find("^X;171;") then xParts = xParts + 1 ok(#t <= 250, "recipe messages stay under 250 bytes") end
+end
+local big = A.ns.Prof.RecipesOf("Cato Cobalt", 171)
+ok(big and big.n == 600 and xParts >= 5 and xParts <= 9, "600 recipes cross in a few parts (" .. xParts .. ")")
+ok(Pc.AskRecipes("Aria Ashfall", 186) and not Pc.AskRecipes("Aria Ashfall", 186), "asking twice in a row asks once")
+Advance(5)
+ok(Pc.notRead["Aria Ashfall:186"] ~= nil, "someone who hasn't opened that window yet says so")
+local bX = false
+for _, t in ipairs(B.sent) do if t:find("^X;186;") then bX = true end end
+ok(not bX, "only the one asked answers")
+
 -- Discord names travel in the hello.
 local tocVersion = io.open(DIR .. "/Nerdelandslaget_Riket.toc"):read("*a"):match("## Version: ([%d%.]+)")
 ok(A.R.db.discords["Cato Cobalt"] == "cato_dc" and Cc.R.db.discords["Aria Ashfall"] == "aria_dc", "Discord names reach the other guild")
@@ -580,47 +639,122 @@ ok(#pp.list.box.dp.items == 3, "all three professions listed")
 for _, it in ipairs(pp.filter.root.items) do if it.text == "Alchemy" then it.set(it.data) end end
 ok(Cc.R.db.profFilter == 171 and #pp.list.box.dp.items == 1, "choosing Alchemy filters the list")
 for _, it in ipairs(pp.filter.root.items) do if it.text == "All professions" then it.set(it.data) end end
-local bs
-for _, r in ipairs(pp.list.box.rows) do if r.item and r.item.id == 164 then bs = r end end
-bs.link.scripts.OnClick(bs.link, "LeftButton")
-ok(Cc.opened and Cc.opened:find("^trade:"), "clicking a profession link opens the recipes")
+local function RowOf(list, fn)
+	for _, r in ipairs(list.box.rows) do if r.item and fn(r.item) then return r end end
+end
+local rv = pp.recipes
 
--- Offline players are hidden, and a link that doesn't open says so.
+-- Clicking a profession shows its recipes in Riket, asking the player for them when needed.
+Cc.R.db.recipes["Aria Ashfall"] = nil
+Advance(25)   -- (past the time Aria waits before sending the same recipes again)
+local bs = RowOf(pp.list, function(it) return it.id == 164 end)
+bs.link.scripts.OnClick(bs.link, "LeftButton")
+ok(rv.shown and not pp.listView.shown and rv.list.empty.text:find("Asking Aria", 1, true), "clicking a profession opens its recipes, asking the player: " .. tostring(rv.list.empty.text))
+Advance(3)
+ok(has(Cc.sent, "W;Aria Ashfall;164"), "the question goes out")
+local ritems = rv.list.items
+ok(#ritems == 40 and ritems[1].name == "Bronze Thing 01" and ritems[40].name == "Copper Thing 38", "the answer fills the list, A to Z (" .. #ritems .. ")")
+ok(rv.title.text:find("Blacksmithing 250/300", 1, true) and rv.title.text:find("40 recipes", 1, true), "the title: who, profession, skill, how many: " .. tostring(rv.title.text))
+local r1 = rv.list.box.rows[1]
+ok(r1.name.text == "Bronze Thing 01", "a row shows the recipe's name")
+rv.search.text = "copper"
+rv.search.scripts.OnTextChanged(rv.search)
+ok(#rv.list.items == 20 and rv.search.hint.shown == false, "the search box filters by name")
+rv.search.text = "nothing like this"
+rv.search.scripts.OnTextChanged(rv.search)
+ok(#rv.list.items == 0 and rv.list.empty.text:find("No recipes match", 1, true), "and says when nothing matches")
+rv.search.text = ""
+rv.search.scripts.OnTextChanged(rv.search)
+r1 = rv.list.box.rows[1]
+r1.scripts.OnEnter(r1)
+ok(Cc.env.GameTooltip.tlines[1] == "spell " .. r1.item.id and has(Cc.env.GameTooltip.tlines, "Click to ask Aria to make it"), "its tooltip is the recipe's, with what a click does")
+Cc.insertedAll = {}
+r1.scripts.OnClick(r1, "LeftButton")
+ok(Cc.tellTo == "Aria Ashfall" and Cc.inserted == "Can you make |cff71d5ff|Hspell:" .. r1.item.id .. ":0|h[Bronze Thing 01]|h|r?", "a click whispers Aria: can you make it? " .. tostring(Cc.inserted))
+Cc.tellTo, Cc.shift = nil, true
+r1.scripts.OnClick(r1, "LeftButton")
+Cc.shift = false
+ok(Cc.tellTo == nil and Cc.inserted == "|cff71d5ff|Hspell:" .. r1.item.id .. ":0|h[Bronze Thing 01]|h|r", "shift-click puts the recipe in chat")
+
+-- The game's own window, from the recipes' "Open in game".
+ok(rv.game.shown ~= false, "\"Open in game\" is there for someone with a link")
+Cc.opened = nil
+rv.game.scripts.OnClick(rv.game)
+Advance(5)
+ok(Cc.opened and Cc.opened:find("^trade:") and has(Cc.prints, "the game didn't open Aria Ashfall's Blacksmithing window"), "it tries the game's link, and says when the game doesn't open it")
+Cc.recipesOpen = true
+local said1 = 0
+for _, l in ipairs(Cc.prints) do if l:find("didn't open Aria", 1, true) then said1 = said1 + 1 end end
+rv.game.scripts.OnClick(rv.game)
+Advance(5)
+local said2 = 0
+for _, l in ipairs(Cc.prints) do if l:find("didn't open Aria", 1, true) then said2 = said2 + 1 end end
+ok(said2 == said1, "when it does open, nothing is said")
+Cc.recipesOpen = false
+rv.back.scripts.OnClick(rv.back)
+ok(not rv.shown and pp.listView.shown and #pp.list.items == 3, "Back returns to everyone's professions")
+
+-- Our own recipes: no asking, no whispering.
+local mineRow = RowOf(pp.list, function(it) return it.me end)
+mineRow.scripts.OnClick(mineRow, "LeftButton")
+ok(rv.shown and #rv.list.items == 600 and not has(Cc.sent, "W;Cato Cobalt") and rv.game.shown == false, "our own profession shows our recipes, with no question and no game button")
+Cc.tellTo = nil
+rv.list.box.rows[1].scripts.OnClick(rv.list.box.rows[1], "LeftButton")
+ok(Cc.tellTo == nil, "and a click on our own recipe whispers nobody")
+rv.back.scripts.OnClick(rv.back)
+
+-- Someone online with an older Riket: no answer, and it says so.
+Cc.R.db.crafters["Old Smith"] = { guild = "Nerdelandslaget", class = "WARRIOR", level = 60, t = now, profs = { [164] = { rank = 200, max = 300 } }, links = {} }
+Cc.R.peers["Old Smith"] = { guild = "Nerdelandslaget", t = now, version = "1.4.2" }
+pp:Refresh()
+local old = RowOf(pp.list, function(it) return it.name == "Old Smith" end)
+old.scripts.OnClick(old, "LeftButton")
+ok(rv.list.empty.text:find("Asking Old", 1, true), "asking someone with an older Riket")
+Advance(9)
+ok(rv.list.empty.text:find("No answer from Old", 1, true) and rv.list.empty.text:find("1.4.4", 1, true), "no answer: it says they may need to update: " .. tostring(rv.list.empty.text))
+rv.back.scripts.OnClick(rv.back)
+
+-- Offline players are hidden; their recipes show if Riket has heard them, with no question.
 Cc.R.db.crafters["Emo Lock"] = { guild = "Nerdelandslaget", class = "WARLOCK", level = 40, t = now - 3600,
 	profs = { [197] = { rank = 100, max = 150 } }, links = { [197] = "|cffffd000|Htrade:Player-1-EMO:3908:197|h[Tailoring]|h|r" } }
+Cc.R.db.crafters["Quiet Smith"] = { guild = "Nerdelandslaget", class = "WARRIOR", level = 30, t = now - 3600, profs = { [164] = { rank = 50, max = 75 } }, links = {} }
+Cc.R.db.recipes["Emo Lock"] = { [197] = { s = (Pc.Encode({ 2660, 2667, 2674 })), n = 3, t = now - 2 * 86400 } }
 pp:Refresh()
 local names2 = {}
 for _, it in ipairs(pp.list.items) do names2[#names2 + 1] = it.name end
-ok(not has(names2, "Emo Lock") and #pp.list.items == 3, "an offline player's professions are hidden")
+ok(not has(names2, "Emo Lock") and not has(names2, "Quiet Smith"), "an offline player's professions are hidden")
 pp.offline.checked = true
 pp.offline.scripts.OnClick(pp.offline)
-local emo
-for _, r in ipairs(pp.list.box.rows) do if r.item and r.item.name == "Emo Lock" then emo = r end end
+local emo = RowOf(pp.list, function(it) return it.name == "Emo Lock" end)
 ok(Cc.R.db.profOffline and emo and emo.item.online == false and emo.alpha == 0.55 and emo.name.text:find("(offline)", 1, true), "\"Show offline players\" shows them, greyed")
+local sentBefore = #Cc.sent
+emo.scripts.OnClick(emo, "LeftButton")
+local askedEmo = false
+for i = sentBefore + 1, #Cc.sent do if Cc.sent[i]:find("^W;Emo Lock") then askedEmo = true end end
+ok(#rv.list.items == 3 and not askedEmo and rv.title.text:find("heard 2d ago", 1, true), "an offline player's recipes, as last heard, without asking: " .. tostring(rv.title.text))
 Cc.opened = nil
-emo.link.scripts.OnClick(emo.link, "LeftButton")
-ok(Cc.opened == nil and has(Cc.prints, "Emo Lock is offline"), "clicking an offline player's link says why it won't open")
+rv.game.scripts.OnClick(rv.game)
+ok(Cc.opened == nil and has(Cc.prints, "Emo Lock is offline"), "\"Open in game\" for someone offline says why it won't work")
+rv.back.scripts.OnClick(rv.back)
+local quiet = RowOf(pp.list, function(it) return it.name == "Quiet Smith" end)
+quiet.scripts.OnClick(quiet, "LeftButton")
+ok(#rv.list.items == 0 and rv.list.empty.text:find("Quiet is offline, and Riket hasn't seen", 1, true), "someone offline whose recipes nobody has heard: it says so")
+rv.back.scripts.OnClick(rv.back)
+emo = RowOf(pp.list, function(it) return it.name == "Emo Lock" end)
 Cc.shift = true
 emo.link.scripts.OnClick(emo.link, "LeftButton")
 Cc.shift = false
-ok(Cc.inserted and Cc.inserted:find("Tailoring", 1, true), "shift-click still puts the link in chat")
+ok(Cc.inserted and Cc.inserted:find("Tailoring", 1, true) and not rv.shown, "shift-click on a profession link still puts it in chat")
+emo.scripts.OnClick(emo, "RightButton")
+local pm = Cc.menus[#Cc.menus]
+ok(pm.items[1].title == "Emo Lock" and pm.items[2].text == "Show recipes" and pm.items[3].text == "Whisper" and pm.items[4].text == "Open in game", "right-click: recipes, whisper, the game's window")
 pp.offline.checked = false
 pp.offline.scripts.OnClick(pp.offline)
-ok(not Cc.R.db.profOffline and #pp.list.items == 3, "and unticking hides them again")
-for _, r in ipairs(pp.list.box.rows) do if r.item and r.item.id == 164 then bs = r end end
-local before2 = #Cc.prints
-bs.link.scripts.OnClick(bs.link, "LeftButton")
-Advance(5)
-ok(Cc.opened and has(Cc.prints, "couldn't open Aria Ashfall's Blacksmithing recipes"), "an online player's link that the game doesn't open is reported, with what to do instead")
-Cc.recipesOpen = true
-local count = 0
-for _, l in ipairs(Cc.prints) do if l:find("couldn't open Aria", 1, true) then count = count + 1 end end
-bs.link.scripts.OnClick(bs.link, "LeftButton")
-Advance(5)
-local count2 = 0
-for _, l in ipairs(Cc.prints) do if l:find("couldn't open Aria", 1, true) then count2 = count2 + 1 end end
-ok(count2 == count, "when the recipes do open, nothing is said")
-Cc.recipesOpen = false
+local emoShown = false
+for _, it in ipairs(pp.list.items) do if it.name == "Emo Lock" then emoShown = true end end
+ok(not Cc.R.db.profOffline and not emoShown, "and unticking hides them again")
+Cc.R.db.crafters["Old Smith"], Cc.R.peers["Old Smith"] = nil, nil
+pp:Refresh()
 
 -- Discord, for a player whose rank can't edit notes.
 tD.scripts.OnClick(tD)

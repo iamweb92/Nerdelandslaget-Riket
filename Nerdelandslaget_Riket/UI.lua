@@ -630,14 +630,64 @@ end
 
 local PROF_SPEC = { { "Profession", 0.20 }, { "Name", 0.25 }, { "Guild", 0.21 }, { "Skill", 0.10 }, { "Link", 0.24 } }
 
+-- Text into the chat box that is open (a link, a question).
+local function InsertChat(text)
+	for _, fn in ipairs({ ChatFrameUtil and ChatFrameUtil.InsertLink or false, ChatEdit_InsertLink or false }) do
+		if type(fn) == "function" then
+			local ok, done = pcall(fn, text)
+			if ok and done then return true end
+		end
+	end
+	local get = (ChatFrameUtil and ChatFrameUtil.GetActiveWindow) or ChatEdit_GetActiveWindow
+	local ok, box = pcall(function() return get and get() end)
+	if ok and IsTable(box) and box.Insert then box:Insert(text) return true end
+	return false
+end
+UI.InsertChat = InsertChat
+
+local function Skill(item)
+	return item.max and item.max > 0 and (item.rank .. "/" .. item.max) or tostring(item.rank)
+end
+
+local function First(name) return (name or ""):match("^(%S+)") or name or "" end
+
+-- A recipe: shift-click puts it in chat, a click asks its crafter to make it.
+function UI.RecipeClicked(r)
+	if not r then return end
+	local link = P.RecipeLink(r.id) or r.name
+	if IsModifiedClick and IsModifiedClick("CHATLINK") then InsertChat(link) return end
+	if r.me then return end
+	R.Whisper(r.crafter)
+	InsertChat("Can you make " .. link .. "?")
+end
+
+local function RecipeTip(row)
+	local r = row.item
+	if not r then return end
+	GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+	local ok = type(GameTooltip.SetSpellByID) == "function" and pcall(GameTooltip.SetSpellByID, GameTooltip, r.id)
+	if not ok then GameTooltip:SetText(r.name, 1, 1, 1) end
+	if not r.me then GameTooltip:AddLine("Click to ask " .. First(r.crafter) .. " to make it", 0.1, 1, 0.1, true) end
+	GameTooltip:AddLine("Shift-click to put it in chat", 0.1, 1, 0.1, true)
+	GameTooltip:Show()
+end
+
 local function BuildProfessions(page, width)
 	local cols = Columns(PROF_SPEC, width)
+	local lv = CreateFrame("Frame", nil, page)   -- the list of everyone's professions
+	lv:SetAllPoints()
+	local rv = CreateFrame("Frame", nil, page)   -- or one player's recipes in one of them
+	rv:SetAllPoints()
+	rv:Hide()
+	page.listView, page.recipes = lv, rv
+	local view = {}   -- the recipes shown: item (the profession's row), token, asking, noAnswer
+
 	local filter
 	local function FilterLabel()
 		local f = R.db.profFilter or 0
 		return f == 0 and "All professions" or P.Name(f)
 	end
-	filter = Dropdown(page, 180, "All professions", function(root)
+	filter = Dropdown(lv, 180, "All professions", function(root)
 		local function is(id) return (R.db.profFilter or 0) == id end
 		local function set(id)
 			R.db.profFilter = id
@@ -650,8 +700,17 @@ local function BuildProfessions(page, width)
 	filter:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -12, -30)
 	page.filter = filter
 
-	Headers(page, cols)
-	local list = List(page, 20, function(row)
+	local function ProfMenu(owner, item)
+		Menu(owner, function(root)
+			root:CreateTitle(item.name)
+			root:CreateButton("Show recipes", function() page:ShowRecipes(item) end)
+			if not item.me then root:CreateButton("Whisper", function() R.Whisper(item.name) end) end
+			if item.link then root:CreateButton("Open in game", function() UI.OpenRecipes(item) end) end
+		end)
+	end
+
+	Headers(lv, cols)
+	local list = List(lv, 20, function(row)
 		row.prof = Cell(row, cols[1], "GameFontNormalSmall")
 		row.name = Cell(row, cols[2])
 		row.guild = Cell(row, cols[3])
@@ -665,44 +724,29 @@ local function BuildProfessions(page, width)
 		row.link.text:SetPoint("RIGHT")
 		row.link:SetScript("OnClick", function(self, button)
 			local item = row.item
-			if not (item and item.link) then return end
-			if IsModifiedClick and IsModifiedClick("CHATLINK") then OpenLink(item.link, button) return end   -- into chat
-			if not item.online then
-				R.Print(item.name .. " is offline. The game only opens a profession link while its player is online.")
-				return
-			end
-			UI.OpenRecipes(item, button)
+			if not item then return end
+			if item.link and IsModifiedClick and IsModifiedClick("CHATLINK") then OpenLink(item.link, button) return end   -- into chat
+			if button == "RightButton" then ProfMenu(self, item) else page:ShowRecipes(item) end
 		end)
 		row.link:SetScript("OnEnter", function(self)
 			local item = row.item
-			if item and item.link then
-				local lines = { item.name .. ", " .. (item.max and item.max > 0 and (item.rank .. "/" .. item.max) or tostring(item.rank)) }
-				if not item.online then lines[#lines + 1] = item.name .. " is offline: the recipes open only while they are online." end
-				Tip(self, item.profession, lines, { "Click to see the recipes", "Shift-click to put the link in chat" })
-			elseif item then
-				Tip(self, "No link yet", { item.me and "Open this profession's window once, and Riket shares its link."
-					or (item.name .. " hasn't opened this profession with Riket yet.") })
-			end
+			if not item then return end
+			local hints = { "Click to see the recipes" }
+			if item.link then hints[2] = "Shift-click to put the link in chat" end
+			Tip(self, item.profession, { item.name .. ", " .. Skill(item) }, hints)
 		end)
 		row.link:SetScript("OnLeave", HideTip)
 		row:SetScript("OnClick", function(self, button)
 			local item = self.item
-			if not item or item.me then return end
-			if button == "RightButton" then
-				Menu(self, function(root)
-					root:CreateTitle(item.name)
-					root:CreateButton("Whisper", function() R.Whisper(item.name) end)
-				end)
-			else
-				R.Whisper(item.name)
-			end
+			if not item then return end
+			if button == "RightButton" then ProfMenu(self, item) else page:ShowRecipes(item) end
 		end)
 		row:SetScript("OnEnter", function(self)
 			local item = self.item
 			if not item then return end
 			local ago = R.Ago(item.t)
 			local lines = { item.guild, "Heard " .. ago .. (ago == "now" and "" or " ago") }
-			Tip(self, item.name, lines, not item.me and { "Click to whisper" } or nil)
+			Tip(self, item.name, lines, { "Click to see the recipes", "Right-click for more" })
 		end)
 		row:SetScript("OnLeave", HideTip)
 	end, function(row, item)
@@ -710,14 +754,14 @@ local function BuildProfessions(page, width)
 		row.prof:SetText(item.profession)
 		row.name:SetText(R.ClassName(item.name, item.class) .. (item.me and (" " .. GREY .. "(you)|r") or (not item.online and (" " .. GREY .. "(offline)|r") or "")))
 		row.guild:SetText(GuildTag(item.guild))
-		row.skill:SetText(item.max and item.max > 0 and (item.rank .. "/" .. item.max) or tostring(item.rank))
+		row.skill:SetText(Skill(item))
 		row.link.text:SetText(item.link or (GREY .. "-|r"))
 	end, "No professions yet. They show as members with Riket come online.")
 	list:SetPoint("TOPLEFT", 0, -26)
 	list:SetPoint("BOTTOMRIGHT")
 	page.list = list
 
-	local ask = Button(page, "Ask everyone again", 150)
+	local ask = Button(lv, "Ask everyone again", 150)
 	ask:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 10, 3)
 	ask:SetScript("OnClick", function()
 		P.Ask()
@@ -725,14 +769,14 @@ local function BuildProfessions(page, width)
 	end)
 	ask:SetScript("OnEnter", function(self)
 		Tip(self, "Ask everyone again", { "Everyone online with Riket sends their professions.",
-			"Open each of your profession windows once, and Riket shares its link." })
+			"Open each of your profession windows once, and Riket shares your recipes." })
 	end)
 	ask:SetScript("OnLeave", HideTip)
 	page.ask = ask
-	local offline = Check(page, "Show offline players", R.db.profOffline, function(on)
+	local offline = Check(lv, "Show offline players", R.db.profOffline, function(on)
 		R.db.profOffline = on
 		page:FillList()
-	end, "Players who are offline, greyed out. Their profession links open only while they are online.")
+	end, "Players who are offline, greyed out. Their recipes show if Riket has seen them.")
 	offline:SetPoint("LEFT", ask, "RIGHT", 12, 0)
 	page.offline = offline
 
@@ -747,9 +791,153 @@ local function BuildProfessions(page, width)
 			or "No professions yet. They show as members with Riket come online.")
 		list:SetItems(items)
 	end
+
+	-- One player's recipes ---------------------------------------------------
+
+	local back = Button(rv, "Back", 80)
+	back:SetPoint("TOPLEFT", 2, -1)
+	back:SetScript("OnClick", function() page:ShowList() end)
+	rv.back = back
+	rv.title = Text(rv, "GameFontNormal")
+	rv.title:SetPoint("LEFT", back, "RIGHT", 12, 0)
+	rv.title:SetPoint("RIGHT", rv, "RIGHT", -200, 0)
+	local search = Input(rv)
+	search:SetSize(170, 20)
+	search:SetPoint("TOPRIGHT", -8, -2)
+	search.hint = Text(search, "GameFontDisableSmall")
+	search.hint:SetPoint("LEFT", 6 - (search.pad or 0), 0)
+	search.hint:SetText("Search")
+	rv.search = search
+
+	local rlist = List(rv, 20, function(row)
+		row.icon = row:CreateTexture(nil, "ARTWORK")
+		row.icon:SetSize(16, 16)
+		row.icon:SetPoint("LEFT", 6, 0)
+		row.name = Text(row, "GameFontHighlightSmall")
+		row.name:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
+		row.name:SetPoint("RIGHT", -8, 0)
+		row:SetScript("OnClick", function(self) UI.RecipeClicked(self.item) end)
+		row:SetScript("OnEnter", RecipeTip)
+		row:SetScript("OnLeave", HideTip)
+	end, function(row, r)
+		row.icon:SetTexture(r.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+		row.name:SetText(r.name)
+	end, "")
+	rlist:SetPoint("TOPLEFT", 0, -28)
+	rlist:SetPoint("BOTTOMRIGHT")
+	rv.list = rlist
+
+	local game = Button(rv, "Open in game", 120)
+	game:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 10, 3)
+	game:SetScript("OnClick", function()
+		local item = view.item
+		if not (item and item.link) then return end
+		if not item.online then
+			R.Print(item.name .. " is offline. The game only opens a profession link while its player is online.")
+			return
+		end
+		UI.OpenRecipes(item)
+	end)
+	game:SetScript("OnEnter", function(self)
+		Tip(self, "Open in game", { "Tries the game's own profession window for this player.",
+			"It only works while they are online, and WoW: Forever may not open it at all." })
+	end)
+	game:SetScript("OnLeave", HideTip)
+	rv.game = game
+	local hint = Text(rv, "GameFontDisableSmall")
+	hint:SetPoint("LEFT", game, "RIGHT", 14, 0)
+	hint:SetText("Click a recipe to ask for it   ·   Shift-click to put it in chat")
+
+	local function Empty(item, rec, shown)
+		local who = First(item.name)
+		if rec then return shown == 0 and "No recipes match your search." or "" end
+		if item.me then return "Open your " .. item.profession .. " window once, and Riket reads your recipes." end
+		if view.asking then return "Asking " .. who .. " for the recipes..." end
+		if P.notRead[item.name .. ":" .. item.id] then
+			return who .. " hasn't opened the " .. item.profession .. " window with Riket 1.4.4 or newer yet. The recipes show once they have."
+		end
+		if not item.online then
+			return who .. " is offline, and Riket hasn't seen these recipes yet. They show once " .. who .. " has opened the " ..
+				item.profession .. " window with Riket 1.4.4 or newer."
+		end
+		if view.noAnswer then return "No answer from " .. who .. ". Riket shares recipes from version 1.4.4, so " .. who .. " may need to update." end
+		return ""
+	end
+
+	function rv:Fill()
+		local item = view.item
+		if not item then return end
+		local rec = P.RecipesOf(item.name, item.id)
+		local title = R.ClassName(item.name, item.class) .. "   " .. item.profession .. " " .. Skill(item)
+		if rec then
+			title = title .. "   " .. GREY .. rec.n .. " recipes"
+			if not item.me and time() - rec.t >= 3600 then title = title .. ", heard " .. R.Ago(rec.t) .. " ago" end
+			title = title .. "|r"
+		end
+		rv.title:SetText(title)
+		local items = {}
+		if rec then
+			local q = strtrim(search:GetText() or ""):lower()
+			for _, id in ipairs(P.Decode(rec.s) or {}) do
+				local name = P.RecipeName(id) or ("Recipe " .. id)
+				if q == "" or name:lower():find(q, 1, true) then
+					items[#items + 1] = { id = id, name = name, icon = P.RecipeIcon(id), crafter = item.name, me = item.me }
+				end
+			end
+			table.sort(items, function(a, b) return a.name < b.name end)
+		end
+		rlist.empty:SetText(Empty(item, rec, #items))
+		rlist:SetItems(items)
+		game:SetShown(item.link ~= nil and not item.me)
+		hint:SetText(item.me and "Shift-click a recipe to put it in chat" or "Click a recipe to ask for it   ·   Shift-click to put it in chat")
+	end
+
+	search:SetScript("OnTextChanged", function(self)
+		self.hint:SetShown((self:GetText() or "") == "")
+		rv:Fill()
+	end)
+	search:SetScript("OnEscapePressed", function(self) self:SetText("") self:ClearFocus() end)
+	search:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+
+	function page:ShowRecipes(item)
+		HideTip()
+		view.item, view.token, view.asking, view.noAnswer = item, {}, false, false
+		lv:Hide()
+		rv:Show()
+		search:SetText("")
+		search.hint:Show()
+		local rec = P.RecipesOf(item.name, item.id)
+		if not item.me and item.online and not (rec and time() - rec.t < 120) and P.AskRecipes(item.name, item.id) then
+			view.asking = true
+			local token = view.token
+			C_Timer.After(8, function()
+				if view.token ~= token or not view.asking then return end
+				view.asking, view.noAnswer = false, true
+				rv:Fill()
+			end)
+		end
+		rv:Fill()
+	end
+	function page:ShowList()
+		view.item = nil
+		rv:Hide()
+		lv:Show()
+		self:FillList()
+	end
+
+	R.OnChange(function(what, name, id)
+		if what ~= "recipes" or not rv:IsShown() then return end
+		local item = view.item
+		if item and item.name == name and item.id == id then
+			view.asking = false
+			rv:Fill()
+		end
+	end)
+
 	function page:Refresh()
 		filter:RiketUpdate(FilterLabel())
 		self:FillList()
+		if rv:IsShown() then rv:Fill() end
 	end
 end
 
@@ -764,10 +952,12 @@ function UI.OpenRecipes(item, button)
 	C_Timer.After(4, function()
 		if pendingRecipes ~= mine then return end
 		pendingRecipes = nil
-		R.Print(("couldn't open %s's %s recipes. Whisper them, or shift-click the link to put it in chat."):format(item.name, item.profession))
+		R.Print(("the game didn't open %s's %s window. Riket's own recipe list works without it."):format(item.name, item.profession))
 	end)
 end
-R.On("TRADE_SKILL_SHOW", function() pendingRecipes = nil end)
+for _, ev in ipairs({ "TRADE_SKILL_SHOW", "TRADE_SKILL_DATA_SOURCE_CHANGED" }) do
+	R.On(ev, function() pendingRecipes = nil end)
+end
 
 ---------------------------------------------------------------------------
 -- Page 3: Discord. Everyone sets their Discord name here; Riket stays off until then. Where
@@ -1582,6 +1772,12 @@ SlashCmdList.NLRIKET = function(msg)
 		for name, p in pairs(R.peers) do
 			R.Print(("  %s <%s> %s, heard %s ago"):format(name, p.guild, p.version or "?", R.Ago(p.t)))
 		end
+		local mine = {}
+		for id, rec in pairs(R.char.recipes) do
+			local ids = P.Decode(rec)
+			mine[#mine + 1] = P.Name(id) .. " " .. (ids and #ids or 0)
+		end
+		R.Print("my recipes read: " .. (#mine > 0 and table.concat(mine, ", ") or "none yet (open a profession window)"))
 	else
 		R.Print("/riket  opens Riket in the guild window (J)   ·   /riket members | professions | discord | check | button | status | debug")
 		R.Print(GREY .. TITLE .. " v" .. tostring(R.VERSION) .. "   ·   " .. CREDIT .. "|r")

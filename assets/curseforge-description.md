@@ -8,14 +8,14 @@
 
 - **One guild chat:** the guild chat in the guild window (J) shows the /g of every nerd guild together, in time order, as `[Nerdelandslaget II] [Name]: text`. You write in the window's own box as always. Officer chat is never mixed.
 - **Members:** a tab with who is online in all the nerd guilds, with level, class, guild, guild rank and Discord name. Click a column to sort, click it again to turn the order round. Click a name to whisper, right-click to invite. Tick "Show offline players" to also see who was online in the last 30 days.
-- **Professions:** a tab with everyone's professions, skill and a link to their recipes. Shift-click a link to put it in chat.
+- **Professions:** a tab with everyone's professions and skill. Click one to see the recipes that player knows, with a search box, even while they're offline. Click a recipe to whisper them "Can you make [recipe]?".
 - **Discord:** a tab where every player sets their Discord name. It is required: Riket stays off until it is set. Where your rank may edit guild notes, one click puts it in your guild note too.
 
 ## Getting started
 
 1. Install Riket and log in.
 2. Press **J**, open the **Discord** tab on the window's right side and write your Discord name.
-3. Open each of your profession windows once, so Riket can share their links.
+3. Open each of your profession windows once, so Riket can share your recipes.
 
 Only players with Riket see the other guilds' chat and lists. One player with Riket online in each guild is enough.
 
