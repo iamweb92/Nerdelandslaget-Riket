@@ -676,28 +676,15 @@ r1.scripts.OnClick(r1, "LeftButton")
 Cc.shift = false
 ok(Cc.tellTo == nil and Cc.inserted == "|cff71d5ff|Hspell:" .. r1.item.id .. ":0|h[Bronze Thing 01]|h|r", "shift-click puts the recipe in chat")
 
--- The game's own window, from the recipes' "Open in game".
-ok(rv.game.shown ~= false, "\"Open in game\" is there for someone with a link")
-Cc.opened = nil
-rv.game.scripts.OnClick(rv.game)
-Advance(5)
-ok(Cc.opened and Cc.opened:find("^trade:") and has(Cc.prints, "the game didn't open Aria Ashfall's Blacksmithing window"), "it tries the game's link, and says when the game doesn't open it")
-Cc.recipesOpen = true
-local said1 = 0
-for _, l in ipairs(Cc.prints) do if l:find("didn't open Aria", 1, true) then said1 = said1 + 1 end end
-rv.game.scripts.OnClick(rv.game)
-Advance(5)
-local said2 = 0
-for _, l in ipairs(Cc.prints) do if l:find("didn't open Aria", 1, true) then said2 = said2 + 1 end end
-ok(said2 == said1, "when it does open, nothing is said")
-Cc.recipesOpen = false
+-- Riket never opens the game's profession window: one opened from an addon stays blank.
+ok(rv.game == nil, "no \"Open in game\" button any more")
 rv.back.scripts.OnClick(rv.back)
 ok(not rv.shown and pp.listView.shown and #pp.list.items == 3, "Back returns to everyone's professions")
 
 -- Our own recipes: no asking, no whispering.
 local mineRow = RowOf(pp.list, function(it) return it.me end)
 mineRow.scripts.OnClick(mineRow, "LeftButton")
-ok(rv.shown and #rv.list.items == 600 and not has(Cc.sent, "W;Cato Cobalt") and rv.game.shown == false, "our own profession shows our recipes, with no question and no game button")
+ok(rv.shown and #rv.list.items == 600 and not has(Cc.sent, "W;Cato Cobalt"), "our own profession shows our recipes, with no question")
 Cc.tellTo = nil
 rv.list.box.rows[1].scripts.OnClick(rv.list.box.rows[1], "LeftButton")
 ok(Cc.tellTo == nil, "and a click on our own recipe whispers nobody")
@@ -732,9 +719,6 @@ emo.scripts.OnClick(emo, "LeftButton")
 local askedEmo = false
 for i = sentBefore + 1, #Cc.sent do if Cc.sent[i]:find("^W;Emo Lock") then askedEmo = true end end
 ok(#rv.list.items == 3 and not askedEmo and rv.title.text:find("heard 2d ago", 1, true), "an offline player's recipes, as last heard, without asking: " .. tostring(rv.title.text))
-Cc.opened = nil
-rv.game.scripts.OnClick(rv.game)
-ok(Cc.opened == nil and has(Cc.prints, "Emo Lock is offline"), "\"Open in game\" for someone offline says why it won't work")
 rv.back.scripts.OnClick(rv.back)
 local quiet = RowOf(pp.list, function(it) return it.name == "Quiet Smith" end)
 quiet.scripts.OnClick(quiet, "LeftButton")
@@ -747,7 +731,7 @@ Cc.shift = false
 ok(Cc.inserted and Cc.inserted:find("Tailoring", 1, true) and not rv.shown, "shift-click on a profession link still puts it in chat")
 emo.scripts.OnClick(emo, "RightButton")
 local pm = Cc.menus[#Cc.menus]
-ok(pm.items[1].title == "Emo Lock" and pm.items[2].text == "Show recipes" and pm.items[3].text == "Whisper" and pm.items[4].text == "Open in game", "right-click: recipes, whisper, the game's window")
+ok(pm.items[1].title == "Emo Lock" and pm.items[2].text == "Show recipes" and pm.items[3].text == "Whisper" and #pm.items == 3, "right-click: recipes and whisper, not the game's window")
 pp.offline.checked = false
 pp.offline.scripts.OnClick(pp.offline)
 local emoShown = false
@@ -797,6 +781,22 @@ host:SelectClub(OTHER_CLUB)
 ok(not tM.shown and not CO.box.shown and mf.alpha == 1, "another community: no Riket tabs, and its own chat")
 host:SelectClub(GUILD_CLUB)
 ok(tM.shown and CO.box.shown, "back on the guild: tabs and merged chat return")
+-- Links in the merged chat: safe ones open, a profession's goes to Riket, the rest are left
+-- to the normal chat window (opening the game's windows from an addon spoils them).
+local click = CO.smf.scripts.OnHyperlinkClick
+Cc.opened = nil
+click(CO.smf, "item:19019::::::::60:::::", "|cffa335ee|Hitem:19019::::::::60:::::|h[Thunderfury]|h|r", "LeftButton")
+ok(Cc.opened == "item:19019::::::::60:::::", "an item link opens as usual")
+Cc.opened = nil
+click(CO.smf, "achievement:6:Player-1:0:0:0:0:0:0:0:0", "|cffffff00|Hachievement:6:Player-1:0:0:0:0:0:0:0:0|h[Level 10]|h|r", "LeftButton")
+ok(Cc.opened == nil and has(Cc.prints, "click that link in your normal chat window"), "an achievement link isn't opened from Riket's chat, and it says where to click it")
+Cc.R.db.profFilter = 0
+click(CO.smf, "trade:Player-1-ABC:2259:171", "|cffffd000|Htrade:Player-1-ABC:2259:171|h[Alchemy]|h|r", "LeftButton")
+ok(Cc.opened == nil and Cc.R.db.profFilter == 171 and Cc.ns.UI.pages[2].shown and has(Cc.prints, "profession links don't open"), "a profession link opens Riket's professions for it, never the game's window")
+Cc.R.db.profFilter = 0
+Cc.ns.UI.Open(1)
+host.ChatTab.scripts.OnClick(host.ChatTab)
+host:SelectStream(GUILD_CLUB, GUILD_STREAM)
 host:SetDisplayMode("MINIMIZED")
 ok(not tM.shown, "the small chat-only mode has no Riket tabs")
 host:SetDisplayMode("CHAT")

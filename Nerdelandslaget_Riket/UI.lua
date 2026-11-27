@@ -373,17 +373,6 @@ end
 -- Small helpers
 ---------------------------------------------------------------------------
 
--- Opens a link the way the chat window would (a profession's recipes, a player, an item).
-local function OpenLink(link, button)
-	local ref = type(link) == "string" and link:match("|H(.-)|h")
-	if not ref then return end
-	if IsModifiedClick and IsModifiedClick("CHATLINK") and ChatEdit_InsertLink then
-		ChatEdit_InsertLink(link)
-		return
-	end
-	if SetItemRef then pcall(SetItemRef, ref, link, button or "LeftButton") end
-end
-
 -- Our own guild in guild-chat green, the others in gold.
 local function GuildTag(g)
 	if g == R.MyGuild() then return "|cff40ff40" .. tostring(g) .. "|r" end
@@ -705,7 +694,6 @@ local function BuildProfessions(page, width)
 			root:CreateTitle(item.name)
 			root:CreateButton("Show recipes", function() page:ShowRecipes(item) end)
 			if not item.me then root:CreateButton("Whisper", function() R.Whisper(item.name) end) end
-			if item.link then root:CreateButton("Open in game", function() UI.OpenRecipes(item) end) end
 		end)
 	end
 
@@ -725,7 +713,7 @@ local function BuildProfessions(page, width)
 		row.link:SetScript("OnClick", function(self, button)
 			local item = row.item
 			if not item then return end
-			if item.link and IsModifiedClick and IsModifiedClick("CHATLINK") then OpenLink(item.link, button) return end   -- into chat
+			if item.link and IsModifiedClick and IsModifiedClick("CHATLINK") then InsertChat(item.link) return end   -- into chat
 			if button == "RightButton" then ProfMenu(self, item) else page:ShowRecipes(item) end
 		end)
 		row.link:SetScript("OnEnter", function(self)
@@ -827,25 +815,9 @@ local function BuildProfessions(page, width)
 	rlist:SetPoint("BOTTOMRIGHT")
 	rv.list = rlist
 
-	local game = Button(rv, "Open in game", 120)
-	game:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 10, 3)
-	game:SetScript("OnClick", function()
-		local item = view.item
-		if not (item and item.link) then return end
-		if not item.online then
-			R.Print(item.name .. " is offline. The game only opens a profession link while its player is online.")
-			return
-		end
-		UI.OpenRecipes(item)
-	end)
-	game:SetScript("OnEnter", function(self)
-		Tip(self, "Open in game", { "Tries the game's own profession window for this player.",
-			"It only works while they are online, and WoW: Forever may not open it at all." })
-	end)
-	game:SetScript("OnLeave", HideTip)
-	rv.game = game
 	local hint = Text(rv, "GameFontDisableSmall")
-	hint:SetPoint("LEFT", game, "RIGHT", 14, 0)
+	hint:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 16, 9)
+	rv.hint = hint
 	hint:SetText("Click a recipe to ask for it   ·   Shift-click to put it in chat")
 
 	local function Empty(item, rec, shown)
@@ -888,7 +860,6 @@ local function BuildProfessions(page, width)
 		end
 		rlist.empty:SetText(Empty(item, rec, #items))
 		rlist:SetItems(items)
-		game:SetShown(item.link ~= nil and not item.me)
 		hint:SetText(item.me and "Shift-click a recipe to put it in chat" or "Click a recipe to ask for it   ·   Shift-click to put it in chat")
 	end
 
@@ -941,23 +912,6 @@ local function BuildProfessions(page, width)
 	end
 end
 
-
--- Opens another player's recipes from their link, and says so when the game doesn't (it only
--- opens a profession link while its player is online, and Forever may not open them at all).
-local pendingRecipes
-function UI.OpenRecipes(item, button)
-	local mine = { name = item.name, profession = item.profession }
-	pendingRecipes = mine
-	OpenLink(item.link, button)
-	C_Timer.After(4, function()
-		if pendingRecipes ~= mine then return end
-		pendingRecipes = nil
-		R.Print(("the game didn't open %s's %s window. Riket's own recipe list works without it."):format(item.name, item.profession))
-	end)
-end
-for _, ev in ipairs({ "TRADE_SKILL_SHOW", "TRADE_SKILL_DATA_SOURCE_CHANGED" }) do
-	R.On(ev, function() pendingRecipes = nil end)
-end
 
 ---------------------------------------------------------------------------
 -- Page 3: Discord. Everyone sets their Discord name here; Riket stays off until then. Where
@@ -1460,9 +1414,7 @@ function CO.Attach(host)
 	smf:SetScript("OnMouseWheel", function(self, delta)
 		if delta > 0 then self:ScrollUp() else self:ScrollDown() end
 	end)
-	smf:SetScript("OnHyperlinkClick", function(self, link, text, button)
-		if SetItemRef then pcall(SetItemRef, link, text, button, self) end
-	end)
+	smf:SetScript("OnHyperlinkClick", function(self, link, text, button) CO.LinkClicked(self, link, text, button) end)
 	-- Blizzard's thin scroll bar, centred in the window's own bar's place (a wider one spills
 	-- over the member list next to it)
 	if bar and HasTemplate("MinimalScrollBar") and ScrollUtil and ScrollUtil.InitScrollingMessageFrameWithScrollBar then
@@ -1480,6 +1432,30 @@ end
 
 -- On while the window shows the guild's own chat and Riket runs; the window's chat comes back
 -- the moment it isn't.
+-- A link clicked in the merged chat. The game's windows that some links open (professions,
+-- achievements, the journal, collections) load the first time they are needed, and one loaded
+-- from an addon's click stays spoiled for the session: the profession window comes up blank.
+-- So Riket opens only links that need no such window, and never a profession's.
+local SAFE_LINKS = { item = true, spell = true, enchant = true, quest = true, player = true, BNplayer = true,
+	currency = true, keystone = true, battlepet = true, battlePetAbil = true, unit = true, instancelock = true }
+function CO.LinkClicked(smf, link, text, button)
+	local kind = type(link) == "string" and link:match("^([^:]+)")
+	if SAFE_LINKS[kind] then
+		if SetItemRef then pcall(SetItemRef, link, text, button, smf) end
+		return
+	end
+	if IsModifiedClick and IsModifiedClick("CHATLINK") then InsertChat(text) return end
+	if kind == "trade" then
+		local line = tonumber(link:match(":(%d+)$"))
+		R.db.profFilter = line and P.Canonical(line) or 0
+		UI.Open(PAGE_PROFS)
+		if pages[PAGE_PROFS] and pages[PAGE_PROFS].ShowList then pages[PAGE_PROFS]:ShowList() end
+		R.Print("profession links don't open in WoW: Forever. Click a player here to see their recipes.")
+		return
+	end
+	R.Print("click that link in your normal chat window. Opening it from here could break the game's own window.")
+end
+
 function CO.Update()
 	if not CO.box then return end
 	local host = Host()
