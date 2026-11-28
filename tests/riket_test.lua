@@ -4,7 +4,7 @@
 -- name and Riket in the guild window: its tabs, its pages and the merged guild chat.
 -- Usage: luajit riket_test.lua <addon folder>
 local DIR = assert(arg[1], "addon folder")
-local FILES = { "Core.lua", "Chat.lua", "Members.lua", "Professions.lua", "UI.lua" }
+local FILES = { "Core.lua", "Chat.lua", "Members.lua", "Promote.lua", "Professions.lua", "UI.lua" }
 
 local now = 1795000000
 local timers = {}
@@ -54,6 +54,8 @@ local function Stub(name)
 		if k == "GetWidth" then return function() return 700 end end
 		if k == "GetCenter" then return function() return 100, 100 end end
 		if k == "GetChecked" then return function(self) return self.checked == true end end
+		if k == "SetAttribute" then return function(self, a, v) local t = rawget(self, "attrs") or {} rawset(self, "attrs", t) t[a] = v end end
+		if k == "GetAttribute" then return function(self, a) return (rawget(self, "attrs") or {})[a] end end
 		if k == "SetChecked" then return function(self, v) self.checked = v and true or false end end
 		if k == "HasFocus" then return function() return false end end
 		if k == "GetTop" or k == "GetBottom" then return function() return nil end end
@@ -86,7 +88,7 @@ local function Client(name, guild, opts)
 	}
 	local KNOWN = { UIPanelButtonTemplate = true, UICheckButtonTemplate = true, InputBoxTemplate = true,
 		WowStyle1DropdownTemplate = true, WowScrollBoxList = true, MinimalScrollBar = true, WowTrimScrollBar = true,
-		InsetFrameTemplate = true, CommunitiesFrameTabTemplate = true, BackdropTemplate = true }
+		InsetFrameTemplate = true, CommunitiesFrameTabTemplate = true, BackdropTemplate = true, SecureActionButtonTemplate = true }
 	env.C_XMLUtil = { GetTemplateInfo = function(t)
 		if opts.noTemplates then return nil end
 		if KNOWN[t] then return { type = "Frame" } end
@@ -101,7 +103,9 @@ local function Client(name, guild, opts)
 	end
 	c.Root = Root
 	env.CreateFrame = function(kind, fname, parent, template)
-		if template and not env.C_XMLUtil.GetTemplateInfo(template) then error("Couldn't find inherited node " .. template) end
+		for t in (template or ""):gmatch("[^,%s]+") do
+			if not env.C_XMLUtil.GetTemplateInfo(t) then error("Couldn't find inherited node " .. t) end
+		end
 		local f = Stub(fname)
 		f.kind, f.template, f.parent = kind, template, parent
 		if template == "WowScrollBoxList" then
@@ -171,7 +175,13 @@ local function Client(name, guild, opts)
 	env.UnitClass = function() return "Warrior", opts.class or "WARRIOR" end
 	env.UnitLevel = function() return opts.level or 60 end
 	env.IsInGuild = function() return c.guild ~= nil end
-	env.GetGuildInfo = function() return c.guild, "Member", 3 end
+	env.GetGuildInfo = function() return c.guild, "Member", c.rankIndex or opts.rankIndex or 3 end
+	if opts.ranks then
+		env.GuildControlGetNumRanks = function() local n = 0 for i in pairs(opts.ranks) do n = math.max(n, i + 1) end return n end
+		env.GuildControlGetRankName = function(i) return opts.ranks[i - 1] end
+	end
+	env.CanGuildPromote = function() return opts.canPromote == true end
+	env.InCombatLockdown = function() return c.combat == true end
 	local roster = opts.roster or { { name, 60, "WARRIOR", true } }
 	env.GetNumGuildMembers = function() return #roster, #roster end
 	env.GetGuildRosterInfo = function(i)
@@ -929,6 +939,65 @@ for _, r in ipairs(L.ns.UI.pages[1].list.box.rows) do if r.item and r.item.name 
 ok(qrow and qrow.item.unknown and qrow.zone.text == "Offline", "without the game's last-online time, someone offline shows as just \"Offline\"")
 qrow.scripts.OnClick(qrow, "LeftButton")
 ok(has(L.prints, "Quiet Quinn is offline.") and not has(L.prints, "Quiet Quinn is offline (last"), "and clicking says only that")
+
+---------------------------------------------------------------------------
+-- Promoting: a captain or higher promotes ferskinger online with a guild note to spiller
+---------------------------------------------------------------------------
+
+local PROMO_RANKS = { [0] = "Sjef", "Kaptein", "Spiller", "Fersking" }
+local KP = Client("Kaia Kaptein", "Nerdeskolen", { rankIndex = 1, ranks = PROMO_RANKS, canPromote = true, roster = {
+	{ "Kaia Kaptein", 60, "WARRIOR", true, 1, "Kaptein", "kaia_dc" },
+	{ "Ny Spiller", 12, "MAGE", true, 3, "Fersking", "nyspiller" },
+	{ "Annen Ny", 14, "MAGE", true, 3, "Fersking", "annen_dc" },
+	{ "Uten Note", 10, "MAGE", true, 3, "Fersking", "   " },
+	{ "Borte Bort", 20, "MAGE", false, 3, "Fersking", "borte" },
+	{ "Gammel Spiller", 60, "MAGE", true, 2, "Spiller", "gammel" } } })
+Advance(30)
+local PRm = KP.ns.Promote
+local plan = PRm.Plan()
+ok(plan.allowed and plan.steps == 1 and table.concat(plan.list, ",") == "Annen Ny,Ny Spiller",
+	"ferskinger online with a note, and only them: " .. table.concat(plan.list, ","))
+KP.ns.UI.Open(1)
+local pbtn = KP.env.NLRiketPromoteButton
+ok(pbtn and pbtn.shown and pbtn.text == "Promote to Spiller (2)" and pbtn.enabled ~= false and pbtn.template:find("SecureActionButtonTemplate", 1, true),
+	"a captain sees a secure button on the Members page: " .. tostring(pbtn and pbtn.text))
+ok(pbtn.parent ~= KP.env.NLRiketFrame and pbtn.strata == "DIALOG", "it belongs to no frame of Riket's, so nothing of Riket's gets locked in combat")
+pbtn.scripts.PreClick(pbtn, "LeftButton", false)
+ok(pbtn.attrs.type == "macro" and pbtn.attrs.macrotext == "/gpromote Annen Ny\n/gpromote Ny Spiller", "the click runs /gpromote for each: " .. tostring(pbtn.attrs.macrotext))
+ok(has(KP.prints, "promoting Annen Ny, Ny Spiller to Spiller."), "and says who")
+pbtn.scripts.OnEnter(pbtn)
+ok(has(KP.env.GameTooltip.tlines, "Annen Ny, Ny Spiller"), "its tooltip names them")
+KP.env.C_GuildInfo.IsGuildRankAssignmentAllowed = function(guid, order) return not (guid == "Player-1-Ny Spiller" and order == 3) end
+ok(table.concat(PRm.Plan().list, ",") == "Annen Ny", "someone the game says can't get that rank is left out")
+KP.env.C_GuildInfo.IsGuildRankAssignmentAllowed = nil
+local m2 = PRm.Macro({ list = { "Aa Bb" }, steps = 2 })
+ok(m2 == "/gpromote Aa Bb\n/gpromote Aa Bb", "a rank between them: one /gpromote for each step")
+local many = {}
+for i = 1, 30 do many[i] = ("Fersk Nummer%02d"):format(i) end
+local m3, done3 = PRm.Macro({ list = many, steps = 1 })
+ok(#m3 <= 255 and #done3 > 5 and #done3 < 30, "a macro holds 255 characters: the rest wait for the next click (" .. #done3 .. " now)")
+KP.rankIndex = 2
+PRm.Update()
+ok(not pbtn.shown and not PRm.Plan().allowed, "a spiller doesn't get the button")
+KP.rankIndex = nil
+PRm.Update()
+ok(pbtn.shown, "a captain again does")
+KP.combat = true
+KP.Fire("PLAYER_REGEN_DISABLED")
+pbtn.attrs.macrotext = "untouched"
+pbtn.scripts.PreClick(pbtn, "LeftButton", false)
+PRm.Update()
+ok(not pbtn.shown and pbtn.attrs.macrotext == "untouched", "in combat it hides and nothing on it changes")
+KP.combat = false
+KP.Fire("PLAYER_REGEN_ENABLED")
+ok(pbtn.shown, "and comes back after")
+KP.env.NLRiketTabProfessions.scripts.OnClick(KP.env.NLRiketTabProfessions)
+ok(not pbtn.shown, "only on the Members page")
+KP.ns.UI.Open(1)
+KP.env.CommunitiesFrame:Hide()
+ok(not pbtn.shown, "and not once the guild window closes")
+ok(Cc.env.NLRiketPromoteButton == nil, "a guild without those ranks never gets the button")
+ok(not has(KP.prints, "in the guild window:"), "no errors: " .. tostring(KP.prints[find(KP.prints, "in the guild window:") or 0]))
 
 -- A client without any of the templates still builds, with plain stand-ins.
 local F = Client("Frida Fjell", "Nerdelandslaget II", { noTemplates = true, class = "MAGE" })

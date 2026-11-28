@@ -453,6 +453,7 @@ local function Select(i)
 	for k, t in ipairs(J.tabs or {}) do t:SetChecked(open and k == i) end
 	if i == PAGE_MEMBERS then M.Ask() M.ReadOwn() end
 	if pages[i].Refresh then pages[i]:Refresh() end
+	Safe("place the promote button", ns.Promote.Update)
 end
 UI.Select = Select
 
@@ -1034,10 +1035,12 @@ local function Build(panel)
 	end
 	UI.pages, UI.frame = pages, frame
 	frame:SetScript("OnShow", function() UI.Refresh() end)
+	ns.Promote.Attach(pages[PAGE_MEMBERS], frame)
 end
 
 function UI.Refresh()
 	if not frame or not frame:IsShown() then return end
+	Safe("place the promote button", ns.Promote.Update)
 	Status()
 	local i = R.db.tab or PAGE_MEMBERS
 	if pages[i] and pages[i]:IsShown() and pages[i].Refresh then pages[i]:Refresh() end
@@ -1275,6 +1278,7 @@ function J.Hide(restore)
 	for _, t in ipairs(J.tabs or {}) do t:SetChecked(false) end
 	if not frame or not frame:IsShown() then return end
 	frame:Hide()
+	Safe("place the promote button", ns.Promote.Update)
 	if restore and J.restore then
 		for _, t in ipairs(J.restore) do t:SetChecked(true) end
 	end

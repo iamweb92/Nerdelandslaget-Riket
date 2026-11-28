@@ -7,6 +7,7 @@ Alt ligger i guildvinduet (J):
 - **Felles guild chat:** guild chatten i J-vinduet viser alle nerd-guildenes /g sammen, sortert etter tid. Lenker kan fortsatt klikkes.
 - **Members:** egen fane med hvem som er pålogget i alle guildene, med level, guild, rank og Discord-navn. Klikk på en kolonne for å sortere. «Show offline players» viser også dem som er offline.
 - **Professions:** egen fane med alle sine yrker og skill. Klikk på et yrke for å se oppskriftene personen kan, med søk.
+- **Promotering:** kapteiner og høyere kan promotere alle ferskinger som er pålogget og har skrevet i guild noten til Spiller, med én knapp på Members-siden.
 - **Discord:** egen fane der hver spiller skriver inn Discord-navnet sitt. Det er obligatorisk.
 
 ## Installere
