@@ -997,6 +997,33 @@ KP.ns.UI.Open(1)
 KP.env.CommunitiesFrame:Hide()
 ok(not pbtn.shown, "and not once the guild window closes")
 ok(Cc.env.NLRiketPromoteButton == nil, "a guild without those ranks never gets the button")
+
+-- Riket's admin (Sexy Neophyte) sees the button everywhere; without the rank a click only says so.
+local SN = Client("Sexy Neophyte", "Nerdeskolen", { rankIndex = 2, ranks = PROMO_RANKS, canPromote = true, roster = {
+	{ "Sexy Neophyte", 60, "WARRIOR", true, 2, "Spiller", "neophyte" },
+	{ "Ny Spiller", 12, "MAGE", true, 3, "Fersking", "nyspiller" } } })
+Advance(30)
+ok(SN.R.Me() == "Sexy Neophyte" and SN.ns.Promote.IsAdmin() and not KP.ns.Promote.IsAdmin(), "Sexy Neophyte is the admin, nobody else")
+SN.ns.UI.Open(1)
+local sbtn = SN.env.NLRiketPromoteButton
+ok(sbtn and sbtn.shown and sbtn.text == "Promote to Spiller" and sbtn.enabled ~= false, "the admin sees the button though he is only a spiller")
+sbtn.scripts.OnEnter(sbtn)
+ok(has(SN.env.GameTooltip.tlines, "You don't have the rank for this in Nerdeskolen: only Kaptein and higher can promote."), "its tooltip says why it won't work")
+sbtn.scripts.PreClick(sbtn, "LeftButton", false)
+ok(sbtn.attrs.macrotext == "" and has(SN.prints, "you don't have the rank for this in Nerdeskolen: only Kaptein and higher can promote. Nothing was done."),
+	"a click says he doesn't have the rank, and runs nothing: " .. tostring(SN.prints[#SN.prints]))
+SN.rankIndex = 1
+sbtn.scripts.PreClick(sbtn, "LeftButton", false)
+SN.ns.Promote.Update()
+ok(sbtn.attrs.macrotext == "/gpromote Ny Spiller" and sbtn.text == "Promote to Spiller (1)", "with the rank it promotes, like for anyone")
+SN.rankIndex = nil
+local SN2 = Client("Sexy Neophyte", "Nerdelandslaget II", { rankIndex = 3, roster = { { "Sexy Neophyte", 60, "WARRIOR", true, 3, "Member", "neophyte" } } })
+Advance(30)
+SN2.ns.UI.Open(1)
+local sbtn2 = SN2.env.NLRiketPromoteButton
+sbtn2.scripts.PreClick(sbtn2, "LeftButton", false)
+ok(sbtn2.shown and sbtn2.attrs.macrotext == "" and has(SN2.prints, "Nerdelandslaget II has no ranks Kaptein, Spiller and Fersking, so there is nobody to promote. Nothing was done."),
+	"in a guild without those ranks too: it says so and does nothing")
 ok(not has(KP.prints, "in the guild window:"), "no errors: " .. tostring(KP.prints[find(KP.prints, "in the guild window:") or 0]))
 
 -- A client without any of the templates still builds, with plain stand-ins.

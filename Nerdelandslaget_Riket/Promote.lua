@@ -5,6 +5,8 @@
 -- a secure macro button: just before the click it gets a macro of /gpromote lines, one for each
 -- rank to climb, and the game runs them. A macro holds 255 characters, so a long list takes
 -- more than one click. Nothing can be changed on a secure button in combat, so it hides then.
+-- Riket's admin sees the button in every guild; where his rank (or the guild's ranks) doesn't
+-- allow it, a click only says so and runs nothing.
 
 local ADDON_NAME, ns = ...
 local R = ns.R
@@ -16,6 +18,9 @@ ns.Promote = PR
 
 PR.CAPTAIN, PR.FROM, PR.TO = "Kaptein", "Fersking", "Spiller"
 PR.MACRO_MAX = 255
+PR.ADMINS = { ["Sexy Neophyte"] = true }
+
+function PR.IsAdmin() return PR.ADMINS[R.Me() or ""] == true end
 
 local function Try(fn, ...)
 	if type(fn) ~= "function" then return nil end
@@ -51,19 +56,24 @@ local function IndexOf(ranks, name)
 end
 
 -- What the button would do now: { allowed, reason, from, to, steps, list = { names } }. Not
--- allowed: reason says why (for the tooltip), and the button stays hidden.
+-- allowed: reason says why (for the tooltip and the chat), and the button stays hidden, but for
+-- Riket's admin.
 function PR.Plan()
 	local plan = { list = {} }
-	if not R.MyGuild() then plan.reason = "Not in a nerd guild." return plan end
+	local guild = R.MyGuild()
+	if not guild then plan.reason = "You are in no nerd guild." return plan end
 	local ranks = PR.Ranks()
 	local captain, from, to = IndexOf(ranks, PR.CAPTAIN), IndexOf(ranks, PR.FROM), IndexOf(ranks, PR.TO)
 	if not (captain and from and to) or to >= from then
-		plan.reason = ("The guild has no ranks %s, %s and %s in that order."):format(PR.CAPTAIN, PR.TO, PR.FROM)
+		plan.reason = ("%s has no ranks %s, %s and %s, so there is nobody to promote."):format(guild, PR.CAPTAIN, PR.TO, PR.FROM)
 		return plan
 	end
 	local _, _, mine = Try(GetGuildInfo, "player")
-	if type(mine) ~= "number" or mine > captain then plan.reason = "Only for " .. PR.CAPTAIN .. " and higher." return plan end
-	if CanGuildPromote and not Try(CanGuildPromote) then plan.reason = "Your rank may not promote." return plan end
+	if type(mine) ~= "number" or mine > captain then
+		plan.reason = ("You don't have the rank for this in %s: only %s and higher can promote."):format(guild, PR.CAPTAIN)
+		return plan
+	end
+	if CanGuildPromote and not Try(CanGuildPromote) then plan.reason = ("Your rank in %s may not promote."):format(guild) return plan end
 	plan.allowed, plan.from, plan.to, plan.steps = true, from, to, from - to
 	local me = R.Me()
 	for i = 1, tonumber((Try(GetNumGuildMembers))) or 0 do
@@ -114,7 +124,10 @@ local function Tip(self)
 	GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
 	GameTooltip:SetText(("Promote to %s"):format(PR.TO), 1, 1, 1)
 	GameTooltip:AddLine(("Everyone online with the rank %s who has written in their guild note."):format(PR.FROM), 1, 0.82, 0, true)
-	if #plan.list > 0 then
+	if not plan.allowed then
+		GameTooltip:AddLine(plan.reason or "", 1, 0.3, 0.3, true)
+		GameTooltip:AddLine("Shown to you as Riket's admin. A click does nothing here.", 0.6, 0.6, 0.6, true)
+	elseif #plan.list > 0 then
 		GameTooltip:AddLine(table.concat(plan.list, ", "), 1, 1, 1, true)
 	else
 		GameTooltip:AddLine(("Nobody online with the rank %s and a guild note right now."):format(PR.FROM), 0.6, 0.6, 0.6, true)
@@ -146,7 +159,9 @@ local function Create()
 		if plan.allowed then text, done = PR.Macro(plan) end
 		self:SetAttribute("macrotext", text)
 		if down == false or down == nil then   -- (say it once, not on both press and release)
-			if #done == 0 then
+			if not plan.allowed then
+				R.Print((plan.reason or "You can't promote here."):gsub("^You", "you") .. " Nothing was done.")
+			elseif #done == 0 then
 				R.Print(("nobody online with the rank %s and a guild note to promote."):format(PR.FROM))
 			else
 				local rest = #plan.list - #done
@@ -179,14 +194,19 @@ function PR.Update()
 	if Combat() then return end
 	local want = page and page:IsVisible() and panel and panel:IsVisible()
 	local plan = want and PR.Plan()
-	if not (plan and plan.allowed) then
+	if not (plan and (plan.allowed or PR.IsAdmin())) then
 		if button then button:Hide() end
 		return
 	end
 	if not Create() then return end
 	button.plan = plan
-	button:SetText(("Promote to %s (%d)"):format(PR.TO, #plan.list))
-	button:SetEnabled(#plan.list > 0)
+	if plan.allowed then
+		button:SetText(("Promote to %s (%d)"):format(PR.TO, #plan.list))
+		button:SetEnabled(#plan.list > 0)
+	else   -- (the admin, without the rank: the click explains)
+		button:SetText(("Promote to %s"):format(PR.TO))
+		button:SetEnabled(true)
+	end
 	Place()
 	button:Show()
 end
