@@ -950,25 +950,39 @@ local KP = Client("Kaia Kaptein", "Nerdeskolen", { rankIndex = 1, ranks = PROMO_
 	{ "Ny Spiller", 12, "MAGE", true, 3, "Fersking", "nyspiller" },
 	{ "Annen Ny", 14, "MAGE", true, 3, "Fersking", "annen_dc" },
 	{ "Uten Note", 10, "MAGE", true, 3, "Fersking", "   " },
+	{ "Bare Proff", 15, "MAGE", true, 3, "Fersking", "Ench/Tailor 300" },
+	{ "Proff Navn", 16, "MAGE", true, 3, "Fersking", "BS/LW - Ola" },
 	{ "Borte Bort", 20, "MAGE", false, 3, "Fersking", "borte" },
 	{ "Gammel Spiller", 60, "MAGE", true, 2, "Spiller", "gammel" } } })
 Advance(30)
 local PRm = KP.ns.Promote
 local plan = PRm.Plan()
-ok(plan.allowed and plan.steps == 1 and table.concat(plan.list, ",") == "Annen Ny,Ny Spiller",
-	"ferskinger online with a note, and only them: " .. table.concat(plan.list, ","))
+ok(plan.allowed and plan.steps == 1 and table.concat(plan.list, ",") == "Annen Ny,Ny Spiller,Proff Navn",
+	"ferskinger online with a name in the note, and only them (not \"Ench/Tailor 300\"): " .. table.concat(plan.list, ","))
+local NH = KP.ns.Promote.NoteHasName
+local noName = { "", "   ", "Ench", "BS", "bs", "LW 300", "Alch/Herb", "alchherb", "AlchHerb", "Leatherworking + Skinning", "Ench & Tailor",
+	"First Aid 300", "Gruvedrift og smed", "Lær/flå", "LÆR", "JCs", "Prof: BS/Mining", "discord", "Engi (gnomish)", "Herbalism 300/300",
+	"Tailor, Enchanter", "BSLW", "max cooking + fishing", "Skinning/LW 375", "alch transmute master", "Mining - 300 - Smelting" }
+local bad = {}
+for _, n in ipairs(noName) do if NH(n) then bad[#bad + 1] = n end end
+ok(#bad == 0, "professions alone are no name: " .. table.concat(bad, " | "))
+local withName = { "Kalle", "kalle_99", "Ench - Kalle", "Alch (Kristian)", "nyspiller", "annen_dc", "BS/Mining - Ola", "Lærke", "Øystein",
+	"Minna", "Herbert", "Engelbert", "Tina", "Faen", "Desmond", "Chefen", "Lars", "LW - Mats" }
+bad = {}
+for _, n in ipairs(withName) do if not NH(n) then bad[#bad + 1] = n end end
+ok(#bad == 0, "a name, with or without professions, counts: " .. table.concat(bad, " | "))
 KP.ns.UI.Open(1)
 local pbtn = KP.env.NLRiketPromoteButton
-ok(pbtn and pbtn.shown and pbtn.text == "Promote to Spiller (2)" and pbtn.enabled ~= false and pbtn.template:find("SecureActionButtonTemplate", 1, true),
+ok(pbtn and pbtn.shown and pbtn.text == "Promote to Spiller (3)" and pbtn.enabled ~= false and pbtn.template:find("SecureActionButtonTemplate", 1, true),
 	"a captain sees a secure button on the Members page: " .. tostring(pbtn and pbtn.text))
 ok(pbtn.parent ~= KP.env.NLRiketFrame and pbtn.strata == "DIALOG", "it belongs to no frame of Riket's, so nothing of Riket's gets locked in combat")
 pbtn.scripts.PreClick(pbtn, "LeftButton", false)
-ok(pbtn.attrs.type == "macro" and pbtn.attrs.macrotext == "/gpromote Annen Ny\n/gpromote Ny Spiller", "the click runs /gpromote for each: " .. tostring(pbtn.attrs.macrotext))
-ok(has(KP.prints, "promoting Annen Ny, Ny Spiller to Spiller."), "and says who")
+ok(pbtn.attrs.type == "macro" and pbtn.attrs.macrotext == "/gpromote Annen Ny\n/gpromote Ny Spiller\n/gpromote Proff Navn", "the click runs /gpromote for each: " .. tostring(pbtn.attrs.macrotext))
+ok(has(KP.prints, "promoting Annen Ny, Ny Spiller, Proff Navn to Spiller."), "and says who")
 pbtn.scripts.OnEnter(pbtn)
-ok(has(KP.env.GameTooltip.tlines, "Annen Ny, Ny Spiller"), "its tooltip names them")
+ok(has(KP.env.GameTooltip.tlines, "Annen Ny, Ny Spiller, Proff Navn"), "its tooltip names them")
 KP.env.C_GuildInfo.IsGuildRankAssignmentAllowed = function(guid, order) return not (guid == "Player-1-Ny Spiller" and order == 3) end
-ok(table.concat(PRm.Plan().list, ",") == "Annen Ny", "someone the game says can't get that rank is left out")
+ok(table.concat(PRm.Plan().list, ",") == "Annen Ny,Proff Navn", "someone the game says can't get that rank is left out")
 KP.env.C_GuildInfo.IsGuildRankAssignmentAllowed = nil
 local m2 = PRm.Macro({ list = { "Aa Bb" }, steps = 2 })
 ok(m2 == "/gpromote Aa Bb\n/gpromote Aa Bb", "a rank between them: one /gpromote for each step")

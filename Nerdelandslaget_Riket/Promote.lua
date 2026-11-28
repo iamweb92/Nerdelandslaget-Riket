@@ -1,6 +1,8 @@
 -- Promote: one click for a captain (rank "Kaptein") or higher to promote everyone in our guild
--- who is online, has the rank "Fersking" and has written in their public guild note, to the rank
--- "Spiller". It works on the guild's own ranks, with nothing from the other guilds.
+-- who is online, has the rank "Fersking" and has written a name in their public guild note, to
+-- the rank "Spiller". A note of only professions ("Ench", "BS/LW", "Alch 300") holds no name and
+-- doesn't count; anything else in it does. It works on the guild's own ranks, with nothing from
+-- the other guilds.
 -- The game lets only its own code promote (C_GuildInfo.Promote is protected), so the button is
 -- a secure macro button: just before the click it gets a macro of /gpromote lines, one for each
 -- rank to climb, and the game runs them. A macro holds 255 characters, so a long list takes
@@ -21,6 +23,80 @@ PR.MACRO_MAX = 255
 PR.ADMINS = { ["Sexy Neophyte"] = true }
 
 function PR.IsAdmin() return PR.ADMINS[R.Me() or ""] == true end
+
+---------------------------------------------------------------------------
+-- Is there a name in a guild note? Every word of letters (two or more) counts as a name, but
+-- the words for professions, in English, Norwegian and the usual short forms, and the words
+-- that go with them (numbers, "and", "max", "prof"...). Words run together ("alchherb", "BSLW")
+-- and plurals ("JCs") count as theirs.
+---------------------------------------------------------------------------
+
+PR.NOT_NAMES = {}
+for w in ([[
+alchemy alchemist alch alc alk alky alchy alche alchem alkemi alkymi alkymist alchemie
+transmute transmuter transmutation elixir elixirs potion potions pot pots flask flasks
+blacksmithing blacksmith bs bsmith smith smithing smithy armorsmith armoursmith weaponsmith
+swordsmith axesmith hammersmith smed smeding smedarbeid
+enchanting enchanter enchant ench enc enchy chanter chant dust disenchant disenchanting de
+engineering engineer engi engy eng engie engin enginer engineeer gnomish goblin ingeniør ingenior ingenjør
+herbalism herbalist herbing herb herbal herbo herby herbalisme urter urt urtesanking urtesanker urteplukker
+inscription inscriber scribe scribing insc inscr scrib
+jewelcrafting jewelcrafter jewelcraft jewel jewler jeweler jeweller jc gem gems juveler gullsmed
+leatherworking leatherworker leatherwork leather lw lwer lwing tribal elemental dragonscale
+lær lærarbeid lærarbeider garver garving
+mining miner mine min smelting smelt gruve gruvedrift gruvearbeider
+skinning skinner skin skinn flå flåing flåer flaa flaaing
+tailoring tailor tail tai tailo cloth clothier mooncloth spellcloth shadoweave spellfire skredder sy søm sying
+cooking cook chef kokk matlaging
+first aid firstaid fa bandage førstehjelp forstehjelp
+fishing fisher fisherman fish fiske fisker fiskar
+prof proff profession yrke yrker craft crafter crafting gather gathering gatherer
+master grandmaster grand artisan expert journeyman apprentice illustrious spec specc specced specialization
+max maxed maks lvl lv level skill skilled done ferdig and og the of av med with w discord disc dc
+]]):gmatch("%S+") do PR.NOT_NAMES[w] = true end
+
+-- what run-together words can be made of: the long ones and the well-known short ones
+local PIECES = { bs = true, lw = true, jc = true, fa = true }
+for w in pairs(PR.NOT_NAMES) do if #w >= 3 then PIECES[w] = true end end
+
+local function Fold(s)   -- lower case, Æ Ø Å too (lower() knows only A to Z)
+	return (s:lower():gsub("\195\134", "\195\166"):gsub("\195\152", "\195\184"):gsub("\195\133", "\195\165"))
+end
+
+local function RunTogether(word)
+	local n = #word
+	if n > 40 then return false end
+	local can = { [0] = true }
+	for i = 2, n do
+		for j = 0, i - 2 do
+			if can[j] and PIECES[word:sub(j + 1, i)] then can[i] = true break end
+		end
+	end
+	return can[n] == true
+end
+
+-- a plural of a profession word ("JCs", "enchs", "herbs"), but not of a short one a name could
+-- end in ("Mats", "Des")
+local function Plural(word)
+	if word:sub(-1) ~= "s" then return nil end
+	local base = word:sub(1, -2)
+	if #base >= 4 or PIECES[base] and #base == 2 then return base end
+	return nil
+end
+
+local function NotName(word)
+	if PR.NOT_NAMES[word] or RunTogether(word) then return true end
+	local base = Plural(word)
+	return base ~= nil and (PR.NOT_NAMES[base] or RunTogether(base))
+end
+
+function PR.NoteHasName(note)
+	if type(note) ~= "string" or IsSecret(note) then return false end
+	for word in Fold(note):gmatch("[%a\128-\255]+") do
+		if #word >= 2 and not NotName(word) then return true end
+	end
+	return false
+end
 
 local function Try(fn, ...)
 	if type(fn) ~= "function" then return nil end
@@ -79,7 +155,7 @@ function PR.Plan()
 	for i = 1, tonumber((Try(GetNumGuildMembers))) or 0 do
 		local ok, name, _, rankIndex, _, _, _, note, _, online, _, _, _, _, _, _, _, guid = pcall(GetGuildRosterInfo, i)
 		name, rankIndex, note, online, guid = ok and R.Name(Plain(name)), Plain(rankIndex), Plain(note), Plain(online), Plain(guid)
-		if name and name ~= me and online and rankIndex == from and type(note) == "string" and strtrim(note) ~= "" then
+		if name and name ~= me and online and rankIndex == from and PR.NoteHasName(note) then
 			local fine = true
 			if guid and C_GuildInfo and C_GuildInfo.IsGuildRankAssignmentAllowed then
 				fine = Try(C_GuildInfo.IsGuildRankAssignmentAllowed, guid, to + 1) ~= false
@@ -123,14 +199,14 @@ local function Tip(self)
 	if not plan then return end
 	GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
 	GameTooltip:SetText(("Promote to %s"):format(PR.TO), 1, 1, 1)
-	GameTooltip:AddLine(("Everyone online with the rank %s who has written in their guild note."):format(PR.FROM), 1, 0.82, 0, true)
+	GameTooltip:AddLine(("Everyone online with the rank %s who has written a name in their guild note. Professions alone (\"Ench\", \"BS/LW\") don't count."):format(PR.FROM), 1, 0.82, 0, true)
 	if not plan.allowed then
 		GameTooltip:AddLine(plan.reason or "", 1, 0.3, 0.3, true)
 		GameTooltip:AddLine("Shown to you as Riket's admin. A click does nothing here.", 0.6, 0.6, 0.6, true)
 	elseif #plan.list > 0 then
 		GameTooltip:AddLine(table.concat(plan.list, ", "), 1, 1, 1, true)
 	else
-		GameTooltip:AddLine(("Nobody online with the rank %s and a guild note right now."):format(PR.FROM), 0.6, 0.6, 0.6, true)
+		GameTooltip:AddLine(("Nobody online with the rank %s and a name in their guild note right now."):format(PR.FROM), 0.6, 0.6, 0.6, true)
 	end
 	GameTooltip:AddLine(("For %s and higher."):format(PR.CAPTAIN), 0.6, 0.6, 0.6, true)
 	GameTooltip:Show()
@@ -162,7 +238,7 @@ local function Create()
 			if not plan.allowed then
 				R.Print((plan.reason or "You can't promote here."):gsub("^You", "you") .. " Nothing was done.")
 			elseif #done == 0 then
-				R.Print(("nobody online with the rank %s and a guild note to promote."):format(PR.FROM))
+				R.Print(("nobody online with the rank %s and a name in their guild note to promote."):format(PR.FROM))
 			else
 				local rest = #plan.list - #done
 				R.Print(("promoting %s to %s.%s"):format(table.concat(done, ", "), PR.TO,
