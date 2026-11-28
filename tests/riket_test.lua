@@ -385,7 +385,7 @@ A.env.C_ChatInfo.SendChatMessage("Hello from NL |cffa335ee|Hitem:19019::::::::60
 Advance(5)
 local cLines = Lines(Cc)
 ok(#cLines == 1, "the other guild gets the line once (got " .. #cLines .. ")")
-ok(has(cLines, "[Nerdelandslaget] |Hplayer:Aria Ashfall|h[Aria Ashfall]|h: Hello from NL"), "shown as [Guild] [Name]: text")
+ok(has(cLines, "[Nerdelandslaget] |Hplayer:Aria Ashfall|h[" .. Cc.R.ClassName("Aria Ashfall", "WARRIOR") .. "]|h: Hello from NL"), "shown as [Guild] [Name]: text, the name in class colour: " .. tostring(cLines[1]))
 ok(has(cLines, "|cffa335ee|Hitem:19019::::::::60:::::|h[Thunderfury]|h|r"), "item links stay clickable")
 ok(has(cLines, "||TInterface"), "texture codes are shown as text, not drawn")
 ok(#(Lines(B)) == 0, "our own guild's line is not shown twice to our guild")
@@ -394,13 +394,19 @@ ok(#Cc.R.db.chatLog == 1 and Cc.R.db.chatLog[1].o == true, "kept in the window's
 -- The other direction: Cato writes in <Nerdelandslaget II>.
 Cc.env.C_ChatInfo.SendChatMessage("Hei fra NL II", "GUILD")
 Advance(5)
-ok(has(Lines(A), "[Nerdelandslaget II] |Hplayer:Cato Cobalt|h[Cato Cobalt]|h: Hei fra NL II"), "NL II's /g reaches NL (Aria)")
+ok(has(Lines(A), "[Nerdelandslaget II] |Hplayer:Cato Cobalt|h[" .. A.R.ClassName("Cato Cobalt", "MAGE") .. "]|h: Hei fra NL II"), "NL II's /g reaches NL (Aria), in class colour: " .. tostring(Lines(A)[1]))
 ok(has(Lines(B), "Hei fra NL II"), "NL II's /g reaches NL (Bjorn)")
 ok(not has(Lines(D), "Hei fra NL II"), "outsiders see nothing")
 
 -- A repeat from a second relay (both think they relay for a moment) is dropped.
 A.Fire("CHAT_MSG_ADDON", "NLRIKET1", "C;Nerdelandslaget II;Cato Cobalt;Hei fra NL II", "CHANNEL", "Someone Else-X")
 ok(#Lines(A) == 1, "a repeated line within 20 seconds is dropped")
+A.Fire("CHAT_MSG_ADDON", "NLRIKET1", "C;Nerdelandslaget II;Ghost Writer;boo", "CHANNEL", "Cato Cobalt-X")
+ok(has(Lines(A), "[Nerdelandslaget II] |Hplayer:Ghost Writer|h[Ghost Writer]|h: boo"), "someone whose class nobody knows keeps the guild chat colour")
+A.R.db.roster["Ghost Writer"] = { g = "Nerdelandslaget II", l = 20, c = "MAGE", s = now - 86400 }
+A.Fire("CHAT_MSG_ADDON", "NLRIKET1", "C;Nerdelandslaget II;Ghost Writer;boo again", "CHANNEL", "Cato Cobalt-X")
+ok(has(Lines(A), "[Nerdelandslaget II] |Hplayer:Ghost Writer|h[" .. A.R.ClassName("Ghost Writer", "MAGE") .. "]|h: boo again"), "the class from the members kept between sessions, when the online list hasn't come yet")
+A.R.db.roster["Ghost Writer"] = nil
 
 -- Secret lines (an encounter) are neither read nor repeated.
 local before = #A.sent
@@ -948,10 +954,10 @@ Advance(30)
 ok(Z.R.MyGuild() == "Nørdeklubben" and Z.R.ready, "a player in a nørd guild starts Riket")
 A.env.C_ChatInfo.SendChatMessage("hei nørder", "GUILD")
 Advance(5)
-ok(has(Lines(Z), "[Nerdelandslaget] |Hplayer:Aria Ashfall|h[Aria Ashfall]|h: hei nørder"), "and gets the other guilds' chat")
+ok(has(Lines(Z), "[Nerdelandslaget] |Hplayer:Aria Ashfall|h[" .. Z.R.ClassName("Aria Ashfall", "WARRIOR") .. "]|h: hei nørder"), "and gets the other guilds' chat")
 Z.env.C_ChatInfo.SendChatMessage("hei nerder", "GUILD")
 Advance(5)
-ok(has(Lines(A), "[Nørdeklubben] |Hplayer:Zara Zink|h[Zara Zink]|h: hei nerder"), "and the others get theirs")
+ok(has(Lines(A), "[Nørdeklubben] |Hplayer:Zara Zink|h[" .. A.R.ClassName("Zara Zink", A.ns.Members.ClassOf("Zara Zink") or "?") .. "]|h: hei nerder"), "and the others get theirs")
 
 -- Without the channel: falls back to GUILD (own guild only), no errors.
 local E = Client("Eirik Edge", "Nerdelandslaget", { noChannel = true })

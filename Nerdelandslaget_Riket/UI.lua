@@ -1342,13 +1342,7 @@ end)
 -- nerd guilds' lines in time order, as they come. The window's own box below still writes to /g.
 ---------------------------------------------------------------------------
 
-local function ClassOf(name)
-	for _, e in pairs(M.guilds) do
-		for _, m in ipairs(e.list or {}) do
-			if m.name == name then return m.class end
-		end
-	end
-end
+local function ClassOf(name) return M.ClassOf(name) end
 
 -- "[Name]: text" for our guild, "[Guild] [Name]: text" for the others, with the chat's own
 -- time stamps when the player has them on. raw: text from the game itself (its guild chat

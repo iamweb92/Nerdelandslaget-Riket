@@ -201,6 +201,22 @@ function M.IsOnline(name)
 	return false
 end
 
+-- A player's class (its file name, "MAGE"), from whatever Riket knows of them: the guilds'
+-- online lists, the members kept between sessions, the professions board. Nil if none says.
+function M.ClassOf(name)
+	if not name then return nil end
+	for _, e in pairs(M.guilds) do
+		for _, m in ipairs(e.list or {}) do
+			if m.name == name and m.class then return m.class end
+		end
+	end
+	local k = R.db and R.db.roster[name]
+	if type(k) == "table" and k.c then return k.c end
+	local c = R.db and R.db.crafters[name]
+	if type(c) == "table" and c.class then return c.class end
+	return nil
+end
+
 -- A guild's entry if it is fresh enough to show, else nil.
 function M.Get(guild)
 	local e = M.guilds[guild]

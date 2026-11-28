@@ -26,8 +26,10 @@ function Chat.SafeText(s)
 	return s
 end
 
+-- [Name], clickable, in the player's class colour when Riket knows the class.
 local function PlayerLink(name)
-	return "|Hplayer:" .. name .. "|h[" .. name .. "]|h"
+	local class = ns.Members and ns.Members.ClassOf(name)
+	return "|Hplayer:" .. name .. "|h[" .. (class and R.ClassName(name, class) or name) .. "]|h"
 end
 
 function Chat.Format(guild, author, text)
