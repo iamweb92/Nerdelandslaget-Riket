@@ -1,5 +1,5 @@
 -- Nerdelandslaget: Riket. One guild chat, one list of who is online and one list of everyone's
--- professions for every guild with "nerd" in its name (Nerdelandslaget, Nerdelandslaget II,
+-- professions for every guild with "nerd" or "nørd" in its name (Nerdelandslaget, Nerdelandslaget II,
 -- Nerdealtslaget...). A standalone addon: it needs nothing else, and sits beside Hans's
 -- Nerdelandslaget suite without sharing anything with it (its own channel, data and commands).
 --
@@ -178,9 +178,16 @@ function R.FindMyName()
 	return nil
 end
 
--- Is this a guild of the network? Every guild with "nerd" in its name, any case.
+-- Is this a guild of the network? Every guild with "nerd" or "nørd" (1.4.6) in its name, any
+-- case. (lower() knows only A to Z, so Ø becomes ø by hand: both are two bytes in UTF-8.)
+R.GUILD_WORDS = { "nerd", "n\195\184rd" }
 function R.IsNerdGuild(name)
-	return type(name) == "string" and not IsSecret(name) and name:lower():find("nerd", 1, true) ~= nil
+	if type(name) ~= "string" or IsSecret(name) then return false end
+	local low = name:lower():gsub("\195\152", "\195\184")
+	for _, word in ipairs(R.GUILD_WORDS) do
+		if low:find(word, 1, true) then return true end
+	end
+	return false
 end
 
 -- Our guild's name, or nil when we are in no guild of the network.

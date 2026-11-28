@@ -1536,7 +1536,7 @@ end)
 function UI.Open(i)
 	if not R.db then return end
 	if not R.MyGuild() then
-		R.Print("Riket is for the guilds with \"nerd\" in their name.")
+		R.Print("Riket is for the guilds with \"nerd\" or \"nørd\" in their name.")
 		return
 	end
 	if not Safe("open Riket", J.Open, i) then

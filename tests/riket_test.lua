@@ -938,6 +938,21 @@ Advance(30)   -- (his hello has run out too)
 local bo = OffNames(B)["Old Timer"]
 ok(bo and bo.guild == "Nerdz" and bo.level == 44, "seen online once, offline later")
 
+-- Guilds with "nørd" in the name are in the network too (1.4.6), Ø or ø.
+local IsNerd = A.R.IsNerdGuild
+ok(IsNerd("Nørdeklubben") and IsNerd("DE NØRDE GUTTA") and IsNerd("Nerdelandslaget") and IsNerd("nerdz"), "\"nørd\" counts, in any case, beside \"nerd\"")
+ok(not IsNerd("Nordmenn") and not IsNerd("Nørrøna") and not IsNerd("Some Other Guild") and not IsNerd(nil), "other names don't")
+ok(A.R.CleanGuild("Nørdeklubben") == "Nørdeklubben", "a nørd guild's name travels in messages")
+local Z = Client("Zara Zink", "Nørdeklubben", { class = "MAGE" })
+Advance(30)
+ok(Z.R.MyGuild() == "Nørdeklubben" and Z.R.ready, "a player in a nørd guild starts Riket")
+A.env.C_ChatInfo.SendChatMessage("hei nørder", "GUILD")
+Advance(5)
+ok(has(Lines(Z), "[Nerdelandslaget] |Hplayer:Aria Ashfall|h[Aria Ashfall]|h: hei nørder"), "and gets the other guilds' chat")
+Z.env.C_ChatInfo.SendChatMessage("hei nerder", "GUILD")
+Advance(5)
+ok(has(Lines(A), "[Nørdeklubben] |Hplayer:Zara Zink|h[Zara Zink]|h: hei nerder"), "and the others get theirs")
+
 -- Without the channel: falls back to GUILD (own guild only), no errors.
 local E = Client("Eirik Edge", "Nerdelandslaget", { noChannel = true })
 Advance(30)

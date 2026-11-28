@@ -1,6 +1,6 @@
 # Nerdelandslaget: Riket
 
-En WoW: Forever-addon for alle guilder med «nerd» i navnet: Nerdelandslaget, Nerdelandslaget II og vennene deres. Laget av Neophyte.
+En WoW: Forever-addon for alle guilder med «nerd» eller «nørd» i navnet: Nerdelandslaget, Nerdelandslaget II og vennene deres. Laget av Neophyte.
 
 Alt ligger i guildvinduet (J):
 

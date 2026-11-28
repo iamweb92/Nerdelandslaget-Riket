@@ -1,8 +1,8 @@
 # Nerdelandslaget: Riket
 
-**One guild chat, one member list and one professions board for every guild with "nerd" in its name, right in the guild window (J).** Made by Neophyte for Nerdelandslaget, Nerdelandslaget II and their friends on WoW: Forever.
+**One guild chat, one member list and one professions board for every guild with "nerd" or "nørd" in its name, right in the guild window (J).** Made by Neophyte for Nerdelandslaget, Nerdelandslaget II and their friends on WoW: Forever.
 
-> Riket only does something for players in a guild whose name contains "nerd". In any other guild it stays quiet.
+> Riket only does something for players in a guild whose name contains "nerd" or "nørd". In any other guild it stays quiet.
 
 ## What it does
 
